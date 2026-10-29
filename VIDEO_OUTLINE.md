@@ -11,7 +11,7 @@ Keep the recording under five minutes for the customer pitch and five minutes fo
 Introduce the Jan 15, 2026 example as a single-day diagnostic. State the sources: Elexon WINDFOR forecast vintages and FUELHH realized wind generation. Clarify that this is an accuracy view, not an imbalance-cost calculator.
 
 **1:10–2:00 — Decision rule**  
-Show the delivery date and selection-rule controls. Choose the 07:30 UTC fixed cutoff. Explain that a forecast published after 07:30 cannot be selected, even if it is closer to actuals.
+Show the delivery date and selection-rule controls. For the Jan 15 example, point out the assumed Jan 14 07:30 UTC fixed cutoff. Explain that a forecast published after that cutoff cannot be selected, even if it is closer to actuals.
 
 **2:00–3:00 — Performance view**  
 Walk through MAE, RMSE, signed error, matched coverage, and the forecast-versus-actual chart. Explain that positive signed error is overforecasting and the cost of either direction depends on imbalance prices and the buyer’s position.

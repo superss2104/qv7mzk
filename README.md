@@ -4,7 +4,7 @@ A small decision-support dashboard for comparing Elexon wind-generation forecast
 
 ## Current status
 
-The repository contains a normalized January 2026 publication-window snapshot and a working local dashboard/API. The default page shows a **single-day diagnostic for Jan 15, 2026 at a 07:30 UTC cutoff**. This is a representative sample, not a January-wide backtest. No procurement cost or savings are estimated because demand, procurement positions, and imbalance prices are not included.
+The repository contains a normalized January 2026 publication-window snapshot and a working local dashboard/API. The default page shows a **single-day diagnostic for Jan 15, 2026 using a Jan 14, 2026 07:30 UTC decision cutoff**. The brief does not specify a cutoff time; 07:30 UTC is the configurable default assumption. This is a representative sample, not a January-wide backtest. No procurement cost or savings are estimated because demand, procurement positions, and imbalance prices are not included.
 
 ## Project structure
 
@@ -78,7 +78,7 @@ Choose a different half-open publication window with `--start-date`, `--end-date
 - `GET /api/metadata` — retrieval window, coverage, counts, and checksums.
 - `GET /api/evaluation` — selected forecast series, actual series, errors, and summary metrics.
 
-The default evaluation route is the Jan 15 diagnostic at a 07:30 UTC fixed cutoff. Custom requests can set `delivery_from`, `delivery_to`, and either `mode=fixed_cutoff&cutoff=<UTC timestamp>` or `mode=fixed_horizon&horizon_hours=24`.
+The default evaluation route is the Jan 15 diagnostic at a 07:30 UTC cutoff on the previous day. Custom requests can set `delivery_from`, `delivery_to`, and either `mode=fixed_cutoff&cutoff=<UTC timestamp>` or `mode=fixed_horizon&horizon_hours=24`.
 
 ## Method and limitations
 

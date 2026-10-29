@@ -84,7 +84,7 @@ def evaluation(
         )
         if not is_default_sample:
             raise HTTPException(status_code=422, detail="cutoff is required for a custom fixed_cutoff window")
-        effective_cutoff = datetime(2026, 1, 15, 7, 30, tzinfo=UTC)
+        effective_cutoff = datetime(2026, 1, 14, 7, 30, tzinfo=UTC)
     if mode == "fixed_horizon" and cutoff is not None:
         raise HTTPException(status_code=422, detail="omit cutoff when using fixed_horizon mode")
     try:

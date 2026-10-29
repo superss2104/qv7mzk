@@ -42,6 +42,11 @@ function nextDate(date: string) {
   return new Date(Date.UTC(year, month - 1, day + 1)).toISOString().slice(0, 10);
 }
 
+function previousDate(date: string) {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);
+}
+
 function utcIso(date: string, time = "00:00") {
   return `${date}T${time}:00Z`;
 }
@@ -137,7 +142,7 @@ function App() {
       delivery_to: utcIso(nextDate(deliveryDate)),
       mode,
     });
-    if (mode === "fixed_cutoff") params.set("cutoff", utcIso(deliveryDate, cutoff));
+    if (mode === "fixed_cutoff") params.set("cutoff", utcIso(previousDate(deliveryDate), cutoff));
     else params.set("horizon_hours", horizon);
     return params.toString();
   }, [deliveryDate, mode, cutoff, horizon]);
@@ -169,7 +174,7 @@ function App() {
   }, [query]);
 
   const metrics = evaluation?.metrics;
-  const label = mode === "fixed_cutoff" ? `${cutoff} UTC cutoff` : `${horizon}h lead time`;
+  const label = mode === "fixed_cutoff" ? `${previousDate(deliveryDate)} · ${cutoff} UTC cutoff` : `${horizon}h lead time`;
   const biasPositive = (metrics?.bias_mw ?? 0) >= 0;
 
   return (
@@ -182,8 +187,6 @@ function App() {
         <div className="nav-label">WORKSPACE</div>
         <nav aria-label="Main navigation">
           <a className="nav-item active" href="#overview"><span className="nav-icon">◫</span> Forecast review</a>
-          <a className="nav-item disabled" href="#accuracy" aria-disabled="true"><span className="nav-icon">⌁</span> Accuracy analysis <small>SOON</small></a>
-          <a className="nav-item disabled" href="#method" aria-disabled="true"><span className="nav-icon">◉</span> Data & method</a>
         </nav>
         <div className="sidebar-spacer" />
         <div className="side-status"><span className="status-dot" /><div><strong>Snapshot online</strong><small>Historical data loaded</small></div></div>
@@ -212,7 +215,7 @@ function App() {
               <label className="field"><span>Delivery date</span><input type="date" value={deliveryDate} onChange={(event) => setDeliveryDate(event.target.value)} min="2026-01-01" max="2026-02-02" /></label>
               <label className="field"><span>Selection rule</span><select value={mode} onChange={(event) => setMode(event.target.value as Mode)}><option value="fixed_cutoff">Fixed decision cutoff</option><option value="fixed_horizon">Fixed lead time</option></select></label>
               {mode === "fixed_cutoff" ? (
-                <label className="field"><span>Decision cutoff <em>UTC</em></span><input type="time" value={cutoff} onChange={(event) => setCutoff(event.target.value)} /></label>
+                <label className="field"><span>Decision cutoff <em>UTC · previous day</em></span><input type="time" value={cutoff} onChange={(event) => setCutoff(event.target.value)} /></label>
               ) : (
                 <label className="field"><span>Minimum lead time</span><select value={horizon} onChange={(event) => setHorizon(event.target.value)}><option value="12">12 hours</option><option value="24">24 hours</option><option value="36">36 hours</option><option value="48">48 hours</option></select></label>
               )}
@@ -266,9 +269,9 @@ function App() {
               <div className="context-main"><span>SELECTED VINTAGE</span><strong>{evaluation?.intervals.find((row) => row.publish_time)?.publish_time ? londonTime(evaluation.intervals.find((row) => row.publish_time)?.publish_time, { day: "2-digit", month: "short" }) : "—"}</strong><small>{evaluation?.intervals.find((row) => row.publish_time)?.publish_time ? `${londonTime(evaluation.intervals.find((row) => row.publish_time)?.publish_time)} London time` : "No eligible vintage"}</small></div>
               <div className="context-list">
                 <div><span>Decision rule</span><strong>{mode === "fixed_cutoff" ? "Fixed cutoff" : "Fixed lead time"}</strong></div>
-                <div><span>Cutoff / horizon</span><strong>{mode === "fixed_cutoff" ? `${cutoff} UTC` : `${horizon} hours`}</strong></div>
+                <div><span>Decision cutoff / lead time</span><strong>{mode === "fixed_cutoff" ? `${previousDate(deliveryDate)} ${cutoff} UTC` : `${horizon} hours before each hour`}</strong></div>
                 <div><span>Matched intervals</span><strong>{metrics?.matched_intervals ?? 0} / {metrics?.expected_intervals ?? 24}</strong></div>
-                <div><span>Decision date</span><strong>{deliveryDate}</strong></div>
+                <div><span>Delivery date</span><strong>{deliveryDate}</strong></div>
               </div>
               <div className="exposure-note"><span className="exposure-icon">↗</span><p><strong>Error direction matters.</strong> The cost of over- or underforecasting depends on imbalance prices and the buyer’s position.</p></div>
             </aside>
@@ -277,7 +280,7 @@ function App() {
           <section className="panel interval-panel">
             <div className="panel-header"><div><h3>Hourly interval detail</h3><p>Publication timestamp is retained for each selected forecast.</p></div><span className="table-count">{evaluation?.intervals.length ?? 0} INTERVALS</span></div>
             <div className="table-scroll"><table><thead><tr><th>Delivery start <small>London</small></th><th>Forecast <small>MW</small></th><th>Published <small>London</small></th><th>Actual <small>MW</small></th><th>Error <small>MW</small></th></tr></thead>
-              <tbody>{(evaluation?.intervals ?? []).slice(0, 12).map((row) => (
+              <tbody>{(evaluation?.intervals ?? []).map((row) => (
                 <tr key={row.delivery_start}>
                   <td className="time-cell">{londonTime(row.delivery_start)}</td>
                   <td>{formatNumber(row.forecast_mw)}</td>
@@ -287,7 +290,7 @@ function App() {
                 </tr>
               ))}</tbody>
             </table></div>
-            <div className="table-bottom">Showing first 12 delivery intervals <span>·</span> All timestamps stored in UTC</div>
+            <div className="table-bottom">Showing all {evaluation?.intervals.length ?? 0} delivery intervals <span>·</span> All timestamps stored in UTC</div>
           </section>
 
           <footer className="page-footer"><div><strong>Method note</strong> · {metadata?.interpretation ?? "Forecasts are selected by publication timestamp; no forecast published after the configured decision time is used."}</div><div>Snapshot retrieved {metadata?.retrieved_at ? new Date(metadata.retrieved_at).toLocaleString("en-GB", { timeZone: "Europe/London" }) : "—"}</div></footer>
