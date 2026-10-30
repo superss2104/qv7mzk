@@ -12,7 +12,9 @@ The repository contains a normalized January 2026 publication-window snapshot an
 backend/app/main.py                    FastAPI API and static frontend serving
 backend/app/services/forecast_selection.py
                                         Fixed-cutoff and fixed-horizon selection
-backend/app/services/evaluation.py     Coverage and forecast error metrics
+backend/app/services/evaluation.py     Daily and decision-period error metrics
+backend/app/services/forecast_analysis.py
+                                        Lead-time, revision, and empirical error analysis
 frontend/src/App.tsx                   React overview and interval explorer
 scripts/ingest_data.py                 Reproducible Elexon data ingestion
 data/actuals.csv                       Normalized FUELHH actuals
@@ -78,15 +80,21 @@ Choose a different half-open publication window with `--start-date`, `--end-date
 - `GET /api/metadata` — retrieval window, coverage, counts, and checksums.
 - `GET /api/january-evaluation` — aggregated metrics and daily results for January decision dates; accepts `cutoff_time_utc` (default `07:30`).
 - `GET /api/evaluation` — selected forecast series, actual series, errors, and summary metrics.
+- `GET /api/forecast-analytics` — lead-time buckets, matched-interval revision comparison, and January empirical error quantiles for the selected evaluation rule.
 
 The default daily evaluation is for Jan 15 delivery at a 07:30 UTC cutoff on Jan 14. The January summary applies one shared cutoff to all 24 delivery hours for each decision day from Jan 1 through Jan 31; deliveries run Jan 2 through Feb 1. Custom daily requests can set `delivery_from`, `delivery_to`, and either `mode=fixed_cutoff&cutoff=<UTC timestamp>` or `mode=fixed_horizon&horizon_hours=24`.
 
 ## Method and limitations
 
 - A forecast is eligible only when `publish_time <= cutoff`; a later publication cannot alter a decision-time result.
-- WINDFOR forecast deliveries are hourly while FUELHH actuals are half-hourly. The current comparison uses the arithmetic mean of the two expected half-hour actuals for each complete UTC hour. Incomplete actual hours remain missing; they are not filled with zero.
+- WINDFOR values are hourly and FUELHH reports average MW for each half-hour. Because the two half-hours have equal duration, the arithmetic mean of a complete pair gives the UTC-hour average MW. Incomplete pairs remain missing; they are not filled with zero. See Elexon’s [generation by fuel type data notes](https://bmrs.elexon.co.uk/generation-by-fuel-type).
 - The January summary covers 31 decision days and up to 744 hourly intervals; the selected-day view shows that date's 24 hourly rows.
+- January MAE, RMSE, and bias are calculated from all matched hourly observations together, not by averaging daily metrics. Expected, forecast-available, actual-available, and matched counts are tracked separately.
+- Elexon wind outturn reflects operational-metered generation available to the system operator; embedded or unmetered wind may not be represented in the source total.
 - Positive signed error (`forecast - actual`) is overforecasting; negative signed error is underforecasting. Which direction costs more depends on market prices and the buyer's position.
+- Lead-time accuracy counts every matched forecast-vintage/delivery observation published no later than delivery; only non-empty buckets are returned.
+- Revision impact compares the selected decision-time forecast with the latest vintage published by delivery, using only intervals matched in both. It is retrospective and is not a financial-savings estimate.
+- P10/P50/P90 use linearly interpolated empirical quantiles of January decision-time errors. They are shown only with at least 30 matched observations and are not guaranteed prediction intervals.
 - Dashboard timestamps are shown in `Europe/London`; timestamps in the saved data are UTC.
 - The snapshot covers Jan 2026 publication vintages, with delivery starts from Dec 31 through Feb 2. The exact retrieval timestamp and checksums are in `data/metadata.json`.
 

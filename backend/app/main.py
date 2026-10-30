@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from backend.app.services.evaluation import evaluate, evaluate_decision_period
+from backend.app.services.forecast_analysis import analyze_forecast_window
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -79,6 +80,37 @@ def january_evaluation(
             decision_from=datetime(2026, 1, 1).date(),
             decision_to=datetime(2026, 2, 1).date(),
             cutoff_time_utc=cutoff_time_utc,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/forecast-analytics")
+def forecast_analytics(
+    delivery_from: datetime = Query(default=datetime(2026, 1, 15, tzinfo=UTC)),
+    delivery_to: datetime = Query(default=datetime(2026, 1, 16, tzinfo=UTC)),
+    mode: Literal["fixed_cutoff", "fixed_horizon"] = Query(default="fixed_cutoff"),
+    cutoff: datetime | None = Query(default=None),
+    horizon_hours: float = Query(default=24.0, gt=0, le=168),
+) -> dict[str, object]:
+    forecasts, actuals, _ = load_snapshot()
+    effective_cutoff = cutoff
+    if mode == "fixed_cutoff" and effective_cutoff is None:
+        if delivery_from == datetime(2026, 1, 15, tzinfo=UTC) and delivery_to == datetime(2026, 1, 16, tzinfo=UTC):
+            effective_cutoff = datetime(2026, 1, 14, 7, 30, tzinfo=UTC)
+        else:
+            raise HTTPException(status_code=422, detail="cutoff is required for a custom fixed_cutoff window")
+    if mode == "fixed_horizon" and cutoff is not None:
+        raise HTTPException(status_code=422, detail="omit cutoff when using fixed_horizon mode")
+    try:
+        return analyze_forecast_window(
+            forecasts,
+            actuals,
+            delivery_from=delivery_from,
+            delivery_to=delivery_to,
+            mode=mode,
+            cutoff=effective_cutoff if mode == "fixed_cutoff" else None,
+            horizon=timedelta(hours=horizon_hours) if mode == "fixed_horizon" else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

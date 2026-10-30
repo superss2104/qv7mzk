@@ -111,6 +111,29 @@ h2 { margin-top: 5px; color: #1c2c31; font: 700 17px "Manrope", sans-serif; lett
 .period-stats strong { display: block; margin-top: 7px; color: #263834; font: 700 19px/1.1 "Manrope", sans-serif; }
 .period-stats small { color: #81908a; font: 500 8px "DM Sans", sans-serif; }
 .period-note { margin-top: 10px; color: #929d97; font-size: 8px; }
+.analytics-panel { margin-top: 14px; padding: 16px 17px 13px; }
+.analytics-chart-wrap { margin-top: 11px; min-width: 0; }
+.analytics-chart-controls { display: flex; justify-content: space-between; align-items: center; color: #81908a; font-size: 9px; }
+.analytics-chart-controls label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.analytics-chart-controls input { accent-color: #4c8b83; }
+.analytics-chart, .revision-chart { display: block; width: 100%; height: 245px; overflow: visible; }
+.bucket-count { fill: #9aa49f; font: 8px var(--mono); }
+.analytics-message { margin: 12px 0; color: #884b38; font-size: 10px; }
+.revision-kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.revision-kpis article, .distribution-stats article { padding: 12px 13px; border: 1px solid #edf1ee; border-radius: 6px; background: #fbfcfb; }
+.revision-kpis article > span, .distribution-stats article > span { display: block; color: #788680; font-size: 9px; }
+.revision-kpis strong { display: block; margin-top: 8px; color: #263834; font: 700 20px/1.1 "Manrope", sans-serif; }
+.revision-kpis strong i { color: #8a9992; font: normal 13px "DM Sans", sans-serif; }
+.revision-kpis strong small, .distribution-stats strong small { color: #81908a; font: 500 8px "DM Sans", sans-serif; }
+.revision-kpis article > div { margin-top: 7px; color: #8b9791; font-size: 8px; }
+.revision-method-note { margin-top: 10px; color: #929d97; font-size: 8px; line-height: 1.5; }
+.revision-chart-label { margin-top: 13px; color: #82908a; font-size: 9px; }
+.distribution-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin-top: 14px; }
+.distribution-stats strong { display: block; margin-top: 8px; color: #263834; font: 700 20px/1.1 "Manrope", sans-serif; }
+.forecast-error-band { fill: #4c8b8322; stroke: none; }
+.legend-band { width: 16px; height: 7px; display: inline-block; border-radius: 2px; background: #4c8b8333; }
+.analytics-panel .table-scroll { margin-top: 10px; }
+.analytics-panel table { min-width: 1080px; }
 .chart-panel { min-width: 0; padding: 16px 17px 11px; }
 .panel-header { display: flex; justify-content: space-between; align-items: center; }
 .panel-header h3 { color: #273a36; font: 700 11px "Manrope", sans-serif; }
@@ -175,6 +198,7 @@ tbody tr:last-child td { border-bottom: 0; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .period-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .content-grid { grid-template-columns: minmax(0, 1.5fr) minmax(240px, .9fr); }
+  .analytics-chart, .revision-chart { height: 220px; }
 }
 @media (max-width: 900px) {
   .app-shell { display: block; }
@@ -199,6 +223,11 @@ tbody tr:last-child td { border-bottom: 0; }
   .period-stats { gap: 7px; }
   .period-stats > div { padding: 10px; }
   .period-stats strong { font-size: 17px; }
+  .analytics-panel { padding-right: 11px; padding-left: 11px; }
+  .revision-kpis { grid-template-columns: 1fr; }
+  .distribution-stats { gap: 6px; }
+  .distribution-stats article { padding: 10px; }
+  .distribution-stats strong { font-size: 17px; }
   .metric-card { min-height: 112px; padding: 12px 11px; }
   .metric-value { font-size: 20px; }
   .metric-top { font-size: 9px; }

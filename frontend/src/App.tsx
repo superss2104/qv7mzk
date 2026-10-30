@@ -36,6 +36,52 @@ type PeriodEvaluation = {
   daily: Array<{ decision_date: string; delivery_date: string; cutoff: string; metrics: Metrics }>;
 };
 
+type LeadBucket = {
+  label: string;
+  lower_hours: number;
+  upper_hours: number | null;
+  sample_count: number;
+  mae_mw: number | null;
+  rmse_mw: number | null;
+  bias_mw: number | null;
+};
+
+type RevisionRow = {
+  delivery_start: string;
+  actual_mw: number;
+  decision_forecast_mw: number;
+  decision_publish_time: string;
+  decision_lead_hours: number;
+  decision_error_mw: number;
+  later_forecast_mw: number;
+  later_publish_time: string;
+  later_lead_hours: number;
+  later_error_mw: number;
+};
+
+type ForecastAnalytics = {
+  lead_time: { buckets: LeadBucket[]; observation_count: number };
+  revision: {
+    decision_time: { sample_count: number; mae_mw: number | null; rmse_mw: number | null; bias_mw: number | null };
+    later_vintage: { sample_count: number; mae_mw: number | null; rmse_mw: number | null; bias_mw: number | null };
+    mae_improvement_mw: number | null;
+    rmse_improvement_mw: number | null;
+    matched_intervals: number;
+    intervals: RevisionRow[];
+  };
+  error_distribution: {
+    p10_mw: number | null;
+    p50_mw: number | null;
+    p90_mw: number | null;
+    sample_count: number;
+    minimum_sample_count: number;
+    observation_window: string;
+    selection_rule: Mode;
+    cutoff_time_utc: string;
+    bands: Array<{ delivery_start: string; forecast_mw: number; p10_mw: number; p50_mw: number; p90_mw: number }>;
+  };
+};
+
 type Metadata = {
   retrieved_at?: string;
   interpretation?: string;
@@ -77,11 +123,15 @@ function formatNumber(value: number | null, digits = 0) {
   return new Intl.NumberFormat("en-GB", { maximumFractionDigits: digits, minimumFractionDigits: digits }).format(value);
 }
 
-function Chart({ intervals }: { intervals: Interval[] }) {
+function Chart({ intervals, bands = [] }: { intervals: Interval[]; bands?: ForecastAnalytics["error_distribution"]["bands"] }) {
   const points = intervals.filter((row) => row.actual_mw !== null || row.forecast_mw !== null);
   if (!points.length) return <div className="chart-empty">No intervals to plot for this selection.</div>;
 
-  const values = points.flatMap((row) => [row.actual_mw, row.forecast_mw].filter((value): value is number => value !== null));
+  const bandByDelivery = new Map(bands.map((band) => [band.delivery_start, band]));
+  const values = [
+    ...points.flatMap((row) => [row.actual_mw, row.forecast_mw].filter((value): value is number => value !== null)),
+    ...bands.flatMap((band) => [band.p10_mw, band.p90_mw]),
+  ];
   const minimum = Math.floor((Math.min(...values) - 500) / 1000) * 1000;
   const maximum = Math.ceil((Math.max(...values) + 500) / 1000) * 1000;
   const width = 920;
@@ -98,6 +148,14 @@ function Chart({ intervals }: { intervals: Interval[] }) {
     .map((row, index) => row[field] === null ? null : `${x(index)},${y(row[field]!)}`)
     .filter((value): value is string => value !== null)
     .join(" ");
+  const upperBand = points.flatMap((row, index) => {
+    const band = bandByDelivery.get(row.delivery_start);
+    return band ? [`${x(index)},${y(band.p90_mw)}`] : [];
+  });
+  const lowerBand = points.flatMap((row, index) => {
+    const band = bandByDelivery.get(row.delivery_start);
+    return band ? [`${x(index)},${y(band.p10_mw)}`] : [];
+  }).reverse();
   const tickValues = Array.from({ length: 4 }, (_, index) => minimum + ((maximum - minimum) / 3) * index);
   const xLabels = [0, Math.round((points.length - 1) / 2), points.length - 1];
 
@@ -110,11 +168,12 @@ function Chart({ intervals }: { intervals: Interval[] }) {
             <text x={left - 12} y={y(tick) + 4} textAnchor="end" className="chart-axis">{formatNumber(tick / 1000, 0)}k</text>
           </g>
         ))}
+        {upperBand.length > 1 && <polygon points={[...upperBand, ...lowerBand].join(" ")} className="forecast-error-band" />}
         <polyline points={line("forecast_mw")} fill="none" className="line-forecast" />
         <polyline points={line("actual_mw")} fill="none" className="line-actual" />
         {points.map((row, index) => row.forecast_mw === null ? null : (
           <circle key={`f-${row.delivery_start}`} cx={x(index)} cy={y(row.forecast_mw)} r="3" className="dot-forecast">
-            <title>{`${londonTime(row.delivery_start)} · forecast ${formatNumber(row.forecast_mw)} MW`}</title>
+            <title>{`${londonTime(row.delivery_start)} · forecast ${formatNumber(row.forecast_mw)} MW · published ${londonTime(row.publish_time)}`}</title>
           </circle>
         ))}
         {points.map((row, index) => row.actual_mw === null ? null : (
@@ -131,10 +190,77 @@ function Chart({ intervals }: { intervals: Interval[] }) {
       <div className="chart-legend">
         <span><i className="legend-line actual" /> Actual generation</span>
         <span><i className="legend-line forecast" /> Selected forecast</span>
+        {upperBand.length > 1 && <span><i className="legend-band" /> Empirical P10–P90 error range</span>}
         <span className="chart-unit">MW · delivery start in London time</span>
       </div>
     </div>
   );
+}
+
+function LeadTimeChart({ buckets }: { buckets: LeadBucket[] }) {
+  const [showRmse, setShowRmse] = useState(true);
+  if (!buckets.length) return <div className="chart-empty">No matched forecasts were available in the lead-time buckets for this period.</div>;
+  const width = 760;
+  const height = 265;
+  const left = 54;
+  const right = 18;
+  const top = 16;
+  const bottom = 62;
+  const chartWidth = width - left - right;
+  const chartHeight = height - top - bottom;
+  const values = buckets.flatMap((bucket) => [bucket.mae_mw, showRmse ? bucket.rmse_mw : null].filter((value): value is number => value !== null));
+  const maximum = Math.max(1, ...values) * 1.12;
+  const x = (index: number) => left + (buckets.length <= 1 ? chartWidth / 2 : index * chartWidth / (buckets.length - 1));
+  const y = (value: number) => top + chartHeight - value / maximum * chartHeight;
+  const points = (key: "mae_mw" | "rmse_mw") => buckets.map((bucket, index) => bucket[key] === null ? null : `${x(index)},${y(bucket[key]!)}`).filter((point): point is string => point !== null).join(" ");
+  const ticks = [0, maximum / 2, maximum];
+  return (
+    <div className="analytics-chart-wrap">
+      <div className="analytics-chart-controls"><span>Error (MW)</span><label><input type="checkbox" checked={showRmse} onChange={(event) => setShowRmse(event.target.checked)} /> Show RMSE</label></div>
+      <svg className="analytics-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Forecast MAE and RMSE by lead time">
+        {ticks.map((tick) => <g key={tick}><line x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} className="chart-grid" /><text x={left - 8} y={y(tick) + 3} textAnchor="end" className="chart-axis">{formatNumber(tick)}</text></g>)}
+        <polyline points={points("mae_mw")} fill="none" className="line-actual" />
+        {showRmse && <polyline points={points("rmse_mw")} fill="none" className="line-forecast" />}
+        {buckets.map((bucket, index) => <g key={bucket.label}>
+          {bucket.mae_mw !== null && <circle cx={x(index)} cy={y(bucket.mae_mw)} r="4" className="dot-actual"><title>{`${bucket.label}: MAE ${formatNumber(bucket.mae_mw, 1)} MW · RMSE ${formatNumber(bucket.rmse_mw, 1)} MW · bias ${formatNumber(bucket.bias_mw, 1)} MW · n=${bucket.sample_count}`}</title></circle>}
+          {showRmse && bucket.rmse_mw !== null && <circle cx={x(index)} cy={y(bucket.rmse_mw)} r="3" className="dot-forecast"><title>{`${bucket.label}: RMSE ${formatNumber(bucket.rmse_mw, 1)} MW · n=${bucket.sample_count}`}</title></circle>}
+          <text x={x(index)} y={height - 34} textAnchor="middle" className="chart-axis">{bucket.label}</text>
+          <text x={x(index)} y={height - 18} textAnchor="middle" className="bucket-count">n={bucket.sample_count}</text>
+        </g>)}
+      </svg>
+      <div className="chart-legend"><span><i className="legend-line actual" /> MAE</span>{showRmse && <span><i className="legend-line forecast" /> RMSE</span>}<span className="chart-unit">Lead time = delivery start − publication time</span></div>
+    </div>
+  );
+}
+
+function RevisionChart({ rows }: { rows: RevisionRow[] }) {
+  if (!rows.length) return <div className="chart-empty">No intervals had both a decision-time forecast and a later pre-delivery vintage.</div>;
+  const width = 920;
+  const height = 220;
+  const left = 54;
+  const right = 18;
+  const top = 14;
+  const bottom = 31;
+  const chartWidth = width - left - right;
+  const chartHeight = height - top - bottom;
+  const maximum = Math.max(1, ...rows.flatMap((row) => [Math.abs(row.decision_error_mw), Math.abs(row.later_error_mw)])) * 1.1;
+  const x = (index: number) => left + (rows.length <= 1 ? chartWidth / 2 : index * chartWidth / (rows.length - 1));
+  const y = (value: number) => top + chartHeight - Math.abs(value) / maximum * chartHeight;
+  const line = (field: "decision_error_mw" | "later_error_mw") => rows.map((row, index) => `${x(index)},${y(row[field])}`).join(" ");
+  return <div className="analytics-chart-wrap">
+    <div className="revision-chart-label">Absolute error (MW)</div>
+    <svg className="revision-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Absolute forecast error at decision time compared with later forecasts">
+      {[0, maximum / 2, maximum].map((tick) => <g key={tick}><line x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} className="chart-grid" /><text x={left - 8} y={y(tick) + 3} textAnchor="end" className="chart-axis">{formatNumber(tick)}</text></g>)}
+      <polyline points={line("decision_error_mw")} fill="none" className="line-actual" />
+      <polyline points={line("later_error_mw")} fill="none" className="line-forecast" />
+      {rows.map((row, index) => <g key={row.delivery_start}>
+        <circle cx={x(index)} cy={y(row.decision_error_mw)} r="3" className="dot-actual"><title>{`${londonTime(row.delivery_start)} · decision error ${formatNumber(Math.abs(row.decision_error_mw))} MW · published ${londonTime(row.decision_publish_time)}`}</title></circle>
+        <circle cx={x(index)} cy={y(row.later_error_mw)} r="3" className="dot-forecast"><title>{`${londonTime(row.delivery_start)} · later error ${formatNumber(Math.abs(row.later_error_mw))} MW · published ${londonTime(row.later_publish_time)}`}</title></circle>
+      </g>)}
+      {[0, Math.floor((rows.length - 1) / 2), rows.length - 1].map((index) => <text key={index} x={x(index)} y={height - 8} textAnchor="middle" className="chart-axis">{londonTime(rows[index].delivery_start)}</text>)}
+    </svg>
+    <div className="chart-legend"><span><i className="legend-line actual" /> Decision time</span><span><i className="legend-line forecast" /> Later vintage</span></div>
+  </div>;
 }
 
 function App() {
@@ -144,11 +270,14 @@ function App() {
   const [horizon, setHorizon] = useState("24");
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
   const [periodEvaluation, setPeriodEvaluation] = useState<PeriodEvaluation | null>(null);
+  const [analytics, setAnalytics] = useState<ForecastAnalytics | null>(null);
   const [metadata, setMetadata] = useState<Metadata | null>(null);
   const [busy, setBusy] = useState(true);
   const [periodBusy, setPeriodBusy] = useState(true);
+  const [analyticsBusy, setAnalyticsBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [periodError, setPeriodError] = useState<string | null>(null);
+  const [analyticsError, setAnalyticsError] = useState<string | null>(null);
 
   const query = useMemo(() => {
     const params = new URLSearchParams({
@@ -206,6 +335,24 @@ function App() {
       .finally(() => setPeriodBusy(false));
     return () => controller.abort();
   }, [periodQuery]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setAnalyticsBusy(true);
+    setAnalyticsError(null);
+    fetch(`/api/forecast-analytics?${query}`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Could not load forecast analytics");
+        return response.json() as Promise<ForecastAnalytics>;
+      })
+      .then(setAnalytics)
+      .catch((reason: unknown) => {
+        if (reason instanceof DOMException && reason.name === "AbortError") return;
+        setAnalyticsError(reason instanceof Error ? reason.message : "Could not load forecast analytics.");
+      })
+      .finally(() => setAnalyticsBusy(false));
+    return () => controller.abort();
+  }, [query]);
 
   const metrics = evaluation?.metrics;
   const label = mode === "fixed_cutoff" ? `${previousDate(deliveryDate)} · ${cutoff} UTC cutoff` : `${horizon}h lead time`;
@@ -270,7 +417,10 @@ function App() {
               <div><span>Mean signed error</span><strong>{periodBusy || periodEvaluation?.metrics.bias_mw == null ? "—" : `${periodEvaluation.metrics.bias_mw >= 0 ? "+" : "−"}${formatNumber(Math.abs(periodEvaluation.metrics.bias_mw))}`} <small>MW</small></strong></div>
               <div><span>Matched coverage</span><strong>{periodBusy || !periodEvaluation ? "—" : `${formatNumber(periodEvaluation.metrics.matched_coverage * 100, 1)}%`} <small>{periodBusy || !periodEvaluation ? "of hours" : `${periodEvaluation.metrics.matched_intervals}/${periodEvaluation.metrics.expected_intervals} hours`}</small></strong></div>
             </div>
-            <div className="period-note">Overall scores use matched hours across all January decision dates. Select a delivery date below to inspect its 24 hourly intervals.</div>
+            <div className="period-note">
+              Expected {periodEvaluation?.metrics.expected_intervals ?? "—"} hours · forecasts available {periodEvaluation?.metrics.forecast_available ?? "—"} · actuals available {periodEvaluation?.metrics.actual_available ?? "—"} · matched {periodEvaluation?.metrics.matched_intervals ?? "—"}.
+              Matched coverage requires both an eligible forecast and a complete actual pair; it does not count all forecast vintages. Select a delivery date below to inspect its 24 hourly intervals.
+            </div>
             {periodError && <div className="period-note" role="alert">{periodError}</div>}
           </section>
 
@@ -301,7 +451,7 @@ function App() {
             <article className="metric-card">
               <div className="metric-top"><span>Matched coverage</span><span className="metric-glyph">◉</span></div>
               <div className="metric-value">{busy ? "—" : `${formatNumber((metrics?.matched_coverage ?? 0) * 100)}%`} <small>of hours</small></div>
-              <div className="metric-note">{metrics?.matched_intervals ?? 0} of {metrics?.expected_intervals ?? 24} delivery hours scored</div>
+              <div className="metric-note">Forecasts {metrics?.forecast_available ?? 0} · actuals {metrics?.actual_available ?? 0} · matched {metrics?.matched_intervals ?? 0} of {metrics?.expected_intervals ?? 24}</div>
               <div className="metric-accent accent-green" />
             </article>
           </section>
@@ -309,7 +459,7 @@ function App() {
           <div className="content-grid">
             <section className="panel chart-panel">
               <div className="panel-header"><div><h3>Actual vs selected forecast</h3><p>Hourly wind generation · {deliveryDate}</p></div><span className="unit-chip">MW</span></div>
-              {busy ? <div className="chart-loading"><span className="spinner" /> Loading interval data…</div> : <Chart intervals={evaluation?.intervals ?? []} />}
+              {busy ? <div className="chart-loading"><span className="spinner" /> Loading interval data…</div> : <Chart intervals={evaluation?.intervals ?? []} bands={analytics?.error_distribution.bands} />}
               <div className="chart-footnote"><span className="info-mark">i</span> Actuals are the mean of two half-hour FUELHH records; incomplete hours are left unmatched.</div>
             </section>
 
@@ -322,7 +472,7 @@ function App() {
                 <div><span>Matched intervals</span><strong>{metrics?.matched_intervals ?? 0} / {metrics?.expected_intervals ?? 24}</strong></div>
                 <div><span>Delivery date</span><strong>{deliveryDate}</strong></div>
               </div>
-              <div className="exposure-note"><span className="exposure-icon">↗</span><p><strong>Procurement implication.</strong> More forecast wind means less power to buy against expected demand. Positive error means wind was overforecast, which may leave a buyer short if they relied on that forecast. Negative error may leave excess purchases. Actual needs also depend on demand and the buyer’s position.</p></div>
+              <div className="exposure-note"><span className="exposure-icon">↗</span><p><strong>Error = forecast − actual.</strong> Positive means wind was overforecast and may leave a buyer short if they relied on it; negative means underforecasting and may leave excess purchases; zero is an exact forecast. Which direction costs more depends on demand, procurement positions, and imbalance prices.</p></div>
             </aside>
           </div>
 
@@ -340,6 +490,41 @@ function App() {
               ))}</tbody>
             </table></div>
             <div className="table-bottom">Showing all {evaluation?.intervals.length ?? 0} delivery intervals <span>·</span> All timestamps stored in UTC</div>
+          </section>
+
+          <section className="panel analytics-panel" aria-label="Forecast accuracy by lead time">
+            <div className="panel-header"><div><h3>Forecast Accuracy by Lead Time</h3><p>Selected delivery period · only forecast vintages published by delivery are scored</p></div><span className="table-count">{analytics?.lead_time.observation_count ?? 0} OBSERVATIONS</span></div>
+            {analyticsError && <div className="analytics-message" role="alert">{analyticsError}</div>}
+            {analyticsBusy ? <div className="chart-loading"><span className="spinner" /> Calculating lead-time accuracy…</div> : <LeadTimeChart buckets={analytics?.lead_time.buckets ?? []} />}
+          </section>
+
+          <section className="panel analytics-panel" aria-label="Forecast revision impact">
+            <div className="panel-header"><div><h3>Forecast Revision Impact</h3><p>Retrospective comparison on the same intervals; later vintages are published after the decision cutoff and by delivery.</p></div><span className="table-count">{analytics?.revision.matched_intervals ?? 0} MATCHED</span></div>
+            {analyticsBusy ? <div className="chart-loading"><span className="spinner" /> Comparing forecast vintages…</div> : analytics?.revision.matched_intervals ? <>
+              <div className="revision-kpis">
+                <article><span>MAE · decision vs later</span><strong>{formatNumber(analytics.revision.decision_time.mae_mw)} <i>→</i> {formatNumber(analytics.revision.later_vintage.mae_mw)} <small>MW</small></strong><div>Improvement: {formatNumber(analytics.revision.mae_improvement_mw, 1)} MW · positive means later was more accurate</div></article>
+                <article><span>RMSE · decision vs later</span><strong>{formatNumber(analytics.revision.decision_time.rmse_mw)} <i>→</i> {formatNumber(analytics.revision.later_vintage.rmse_mw)} <small>MW</small></strong><div>Improvement: {formatNumber(analytics.revision.rmse_improvement_mw, 1)} MW · positive means later was more accurate</div></article>
+              </div>
+              <div className="revision-method-note">A retrospective forecast-revision comparison; it does not represent financial savings. The same matched intervals are used for both forecasts.</div>
+              <RevisionChart rows={analytics.revision.intervals} />
+              <div className="table-scroll"><table><thead><tr><th>Delivery <small>London</small></th><th>Actual <small>MW</small></th><th>Decision forecast <small>MW</small></th><th>Published <small>London</small></th><th>Lead</th><th>Decision error</th><th>Later forecast <small>MW</small></th><th>Published <small>London</small></th><th>Lead</th><th>Later error</th></tr></thead>
+                <tbody>{analytics.revision.intervals.map((row) => <tr key={row.delivery_start}>
+                  <td className="time-cell">{londonTime(row.delivery_start)}</td><td>{formatNumber(row.actual_mw)}</td><td>{formatNumber(row.decision_forecast_mw)}</td><td>{londonTime(row.decision_publish_time)}</td><td>{formatNumber(row.decision_lead_hours, 1)} h</td><td>{formatNumber(row.decision_error_mw, 1)}</td><td>{formatNumber(row.later_forecast_mw)}</td><td>{londonTime(row.later_publish_time)}</td><td>{formatNumber(row.later_lead_hours, 1)} h</td><td>{formatNumber(row.later_error_mw, 1)}</td>
+                </tr>)}</tbody>
+              </table></div>
+            </> : <div className="chart-empty">No intervals had both a decision-time forecast and a later pre-delivery vintage.</div>}
+          </section>
+
+          <section className="panel analytics-panel" aria-label="Historical forecast error distribution">
+            <div className="panel-header"><div><h3>Historical Forecast Error Distribution</h3><p>{analytics?.error_distribution.observation_window ?? "January 2026 decision dates"} · {mode === "fixed_cutoff" ? "previous-day cutoff" : `${horizon}-hour lead-time rule`}</p></div><span className="table-count">n={analytics?.error_distribution.sample_count ?? 0}</span></div>
+            {analyticsBusy ? <div className="chart-loading"><span className="spinner" /> Calculating empirical error range…</div> : analytics && analytics.error_distribution.sample_count >= analytics.error_distribution.minimum_sample_count ? <>
+              <div className="distribution-stats">
+                <article><span>P10 error</span><strong>{formatNumber(analytics.error_distribution.p10_mw, 1)} <small>MW</small></strong></article>
+                <article><span>P50 error</span><strong>{formatNumber(analytics.error_distribution.p50_mw, 1)} <small>MW</small></strong></article>
+                <article><span>P90 error</span><strong>{formatNumber(analytics.error_distribution.p90_mw, 1)} <small>MW</small></strong></article>
+              </div>
+              <div className="revision-method-note">The shaded chart range adds these signed-error quantiles to the selected forecast. This is an empirical historical range, not a guaranteed prediction interval. Minimum sample required: {analytics.error_distribution.minimum_sample_count} matched observations.</div>
+            </> : <div className="chart-empty">Quantiles are withheld: {analytics?.error_distribution.sample_count ?? 0} matched observations; at least {analytics?.error_distribution.minimum_sample_count ?? 30} are required.</div>}
           </section>
 
           <footer className="page-footer"><div><strong>Method note</strong> · {metadata?.interpretation ?? "Forecasts are selected by publication timestamp; no forecast published after the configured decision time is used."}</div><div>Snapshot retrieved {metadata?.retrieved_at ? new Date(metadata.retrieved_at).toLocaleString("en-GB", { timeZone: "Europe/London" }) : "—"}</div></footer>

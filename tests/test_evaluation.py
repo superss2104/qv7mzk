@@ -24,6 +24,23 @@ class HourlyActualTests(unittest.TestCase):
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_zero_forecast_and_actual_produce_zero_errors_and_full_coverage(self):
+        result = evaluate(
+            [forecast("2026-01-15T08:00:00Z", "2026-01-15T07:30:00Z", 0)],
+            [actual("2026-01-15T08:00:00Z", 0), actual("2026-01-15T08:30:00Z", 0)],
+            delivery_from="2026-01-15T08:00:00Z",
+            delivery_to="2026-01-15T09:00:00Z",
+            mode="fixed_cutoff",
+            cutoff="2026-01-15T07:30:00Z",
+        )
+        self.assertEqual(result.metrics.expected_intervals, 1)
+        self.assertEqual(result.metrics.forecast_available, 1)
+        self.assertEqual(result.metrics.actual_available, 1)
+        self.assertEqual(result.metrics.matched_intervals, 1)
+        self.assertEqual(result.metrics.mae_mw, 0)
+        self.assertEqual(result.metrics.rmse_mw, 0)
+        self.assertEqual(result.metrics.bias_mw, 0)
+
     def test_metrics_use_only_cutoff_eligible_forecasts_and_complete_actual_hours(self):
         result = evaluate(
             [
@@ -110,16 +127,20 @@ class DecisionPeriodTests(unittest.TestCase):
                 start = datetime(2026, 1, delivery_day, hour, tzinfo=timezone.utc)
                 start_iso = start.isoformat().replace("+00:00", "Z")
                 decision_iso = decision.isoformat().replace("+00:00", "Z")
-                forecasts.append(forecast(start_iso, decision_iso, 110))
+                forecast_value = 110 if day == 1 else 120
+                forecasts.append(forecast(start_iso, decision_iso, forecast_value))
                 forecasts.append(forecast(
                     start_iso,
                     (decision + timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
                     1000,
                 ))
-                actuals.extend([
-                    actual(start_iso, 100),
-                    actual((start + timedelta(minutes=30)).isoformat().replace("+00:00", "Z"), 100),
-                ])
+                if not (day == 2 and hour == 23):
+                    actuals.extend([
+                        actual(start_iso, 100),
+                        actual((start + timedelta(minutes=30)).isoformat().replace("+00:00", "Z"), 100),
+                    ])
+                else:
+                    actuals.append(actual(start_iso, 100))
 
         result = evaluate_decision_period(
             forecasts,
@@ -133,9 +154,12 @@ class DecisionPeriodTests(unittest.TestCase):
         self.assertEqual(result["delivery_from"], "2026-01-02")
         self.assertEqual(result["delivery_to_exclusive"], "2026-01-04")
         self.assertEqual(result["metrics"]["expected_intervals"], 48)
-        self.assertEqual(result["metrics"]["matched_intervals"], 48)
-        self.assertEqual(result["metrics"]["mae_mw"], 10)
-        self.assertEqual(result["metrics"]["bias_mw"], 10)
+        self.assertEqual(result["metrics"]["forecast_available"], 48)
+        self.assertEqual(result["metrics"]["actual_available"], 47)
+        self.assertEqual(result["metrics"]["matched_intervals"], 47)
+        self.assertAlmostEqual(result["metrics"]["mae_mw"], (24 * 10 + 23 * 20) / 47)
+        self.assertAlmostEqual(result["metrics"]["rmse_mw"], math.sqrt((24 * 100 + 23 * 400) / 47))
+        self.assertAlmostEqual(result["metrics"]["bias_mw"], (24 * 10 + 23 * 20) / 47)
         self.assertEqual(result["daily"][0]["cutoff"], "2026-01-01T07:30:00Z")
         self.assertEqual(result["daily"][1]["cutoff"], "2026-01-02T07:30:00Z")
 
