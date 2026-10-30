@@ -8,19 +8,19 @@ Keep the recording under five minutes for the customer pitch and five minutes fo
 “Wind output is uncertain, and buyers make decisions using forecasts that change through the day. Comparing a forecast with the latest estimate after the fact can overstate what was knowable at decision time. This desk keeps the forecast publication time visible and lets us evaluate only information that was available at the chosen cutoff.”
 
 **0:35–1:10 — Scope**  
-Introduce the Jan 15, 2026 example as a single-day diagnostic. State the sources: Elexon WINDFOR forecast vintages and FUELHH realized wind generation. Clarify that this is an accuracy view, not an imbalance-cost calculator.
+Introduce the January decision-period summary and drill into the Jan 15, 2026 delivery-day example. State the sources: Elexon WINDFOR forecast vintages and FUELHH realized wind generation. Clarify that this is an accuracy view, not an imbalance-cost calculator.
 
 **1:10–2:00 — Decision rule**  
 Show the delivery date and selection-rule controls. For the Jan 15 example, point out the assumed Jan 14 07:30 UTC fixed cutoff. Explain that a forecast published after that cutoff cannot be selected, even if it is closer to actuals.
 
 **2:00–3:00 — Performance view**  
-Walk through MAE, RMSE, signed error, matched coverage, and the forecast-versus-actual chart. Explain that positive signed error is overforecasting and the cost of either direction depends on imbalance prices and the buyer’s position.
+Walk through January MAE, RMSE, signed error, matched coverage, then show the selected day's forecast-versus-actual chart. Explain that positive error means forecast wind exceeded actual wind, which could leave a buyer short if they procured against it; negative error could leave excess. Actual needs and costs depend on demand, existing positions, and market prices.
 
 **3:00–3:45 — Interval transparency**  
 Open the hourly interval table. Point out delivery time, selected forecast, publication time, actual, and signed error. Explain that incomplete actual hours remain missing.
 
 **3:45–4:30 — Takeaway**  
-State the single-day diagnostic result and its limits. Invite users to change the cutoff and observe which vintage is selected. Close with the deployment URL once available.
+State the January summary result and its limits. Invite users to select a delivery day and change the cutoff to see which forecast vintage is eligible. Close with the deployment URL once available.
 
 ## Technical walkthrough (about 4:45)
 
@@ -34,7 +34,7 @@ Show `investigation.md` and `scripts/ingest_data.py`. Explain why FUELHH uses se
 Open `forecast_selection.py`. Explain `publish_time <= cutoff`, fixed-cutoff and fixed-horizon modes, deterministic duplicate behavior, and explicit missing results.
 
 **2:45–3:40 — Metrics and assumptions**  
-Open `evaluation.py`. Explain that hourly actuals are the mean of two complete half-hour FUELHH records, coverage counts remain separate, and metrics use matched intervals only. Show the Jan 15 golden fixture and explain that the result is not a full January backtest.
+Open `evaluation.py`. Explain that hourly actuals are the mean of two complete half-hour FUELHH records, coverage counts remain separate, and metrics use matched intervals only. Show how the January summary applies one previous-day cutoff to each decision date and how the selected-day view drills into all 24 intervals.
 
 **3:40–4:25 — Tests and local run**  
 Run `python -m unittest discover -s tests -v`, then show the frontend build command and local URLs. Mention the API smoke check.

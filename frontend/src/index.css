@@ -103,6 +103,14 @@ h2 { margin-top: 5px; color: #1c2c31; font: 700 17px "Manrope", sans-serif; lett
 
 .content-grid { display: grid; grid-template-columns: minmax(0, 1.85fr) minmax(270px, .9fr); gap: 13px; margin-top: 14px; }
 .panel { border: 1px solid #e4ebe7; border-radius: 8px; background: #fff; box-shadow: 0 2px 9px #23493806; }
+.period-panel { margin-top: 17px; padding: 15px 17px 12px; }
+.period-chip { padding: 5px 7px; border: 1px solid #dcebe1; border-radius: 4px; background: #f4f9f5; color: #5c826d; font: 500 8px var(--mono); letter-spacing: .45px; }
+.period-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; margin-top: 13px; }
+.period-stats > div { min-width: 0; padding: 11px 12px; border: 1px solid #edf1ee; border-radius: 6px; background: #fbfcfb; }
+.period-stats span { display: block; color: #788680; font-size: 9px; }
+.period-stats strong { display: block; margin-top: 7px; color: #263834; font: 700 19px/1.1 "Manrope", sans-serif; }
+.period-stats small { color: #81908a; font: 500 8px "DM Sans", sans-serif; }
+.period-note { margin-top: 10px; color: #929d97; font-size: 8px; }
 .chart-panel { min-width: 0; padding: 16px 17px 11px; }
 .panel-header { display: flex; justify-content: space-between; align-items: center; }
 .panel-header h3 { color: #273a36; font: 700 11px "Manrope", sans-serif; }
@@ -165,6 +173,7 @@ tbody tr:last-child td { border-bottom: 0; }
   .topbar { padding: 0 25px; }
   .page-wrap { padding: 25px; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .period-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .content-grid { grid-template-columns: minmax(0, 1.5fr) minmax(240px, .9fr); }
 }
 @media (max-width: 900px) {
@@ -186,6 +195,10 @@ tbody tr:last-child td { border-bottom: 0; }
 }
 @media (max-width: 440px) {
   .metric-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .period-panel { padding-right: 11px; padding-left: 11px; }
+  .period-stats { gap: 7px; }
+  .period-stats > div { padding: 10px; }
+  .period-stats strong { font-size: 17px; }
   .metric-card { min-height: 112px; padding: 12px 11px; }
   .metric-value { font-size: 20px; }
   .metric-top { font-size: 9px; }

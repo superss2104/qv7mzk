@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from backend.app.services.evaluation import evaluate
+from backend.app.services.evaluation import evaluate, evaluate_decision_period
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,7 +26,7 @@ app = FastAPI(
     version="0.1.0",
     description=(
         "Evaluates Elexon WINDFOR forecast vintages against FUELHH actuals. "
-        "The default is a single-day diagnostic, not a complete January backtest."
+        "Provides daily diagnostics and a January day-ahead decision-period summary."
     ),
 )
 app.add_middleware(
@@ -65,6 +65,23 @@ def health() -> dict[str, object]:
 @app.get("/api/metadata")
 def metadata() -> dict[str, object]:
     return load_snapshot()[2]
+
+
+@app.get("/api/january-evaluation")
+def january_evaluation(
+    cutoff_time_utc: time = Query(default=time(7, 30)),
+) -> dict[str, object]:
+    forecasts, actuals, _ = load_snapshot()
+    try:
+        return evaluate_decision_period(
+            forecasts,
+            actuals,
+            decision_from=datetime(2026, 1, 1).date(),
+            decision_to=datetime(2026, 2, 1).date(),
+            cutoff_time_utc=cutoff_time_utc,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/api/evaluation")

@@ -1,8 +1,8 @@
 import math
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
-from backend.app.services.evaluation import evaluate, hourly_actual_means
+from backend.app.services.evaluation import evaluate, evaluate_decision_period, hourly_actual_means
 
 
 def forecast(start, published, value):
@@ -97,6 +97,47 @@ class EvaluationTests(unittest.TestCase):
     def test_rejects_non_hour_aligned_window(self):
         with self.assertRaisesRegex(ValueError, "aligned to UTC hours"):
             evaluate([], [], delivery_from="2026-01-15T08:30:00Z", delivery_to="2026-01-15T09:30:00Z", mode="fixed_cutoff", cutoff="2026-01-15T08:00:00Z")
+
+
+class DecisionPeriodTests(unittest.TestCase):
+    def test_aggregates_day_ahead_metrics_over_decision_dates(self):
+        forecasts = []
+        actuals = []
+        for day in (1, 2):
+            decision = datetime(2026, 1, day, 7, 30, tzinfo=timezone.utc)
+            delivery_day = day + 1
+            for hour in range(24):
+                start = datetime(2026, 1, delivery_day, hour, tzinfo=timezone.utc)
+                start_iso = start.isoformat().replace("+00:00", "Z")
+                decision_iso = decision.isoformat().replace("+00:00", "Z")
+                forecasts.append(forecast(start_iso, decision_iso, 110))
+                forecasts.append(forecast(
+                    start_iso,
+                    (decision + timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+                    1000,
+                ))
+                actuals.extend([
+                    actual(start_iso, 100),
+                    actual((start + timedelta(minutes=30)).isoformat().replace("+00:00", "Z"), 100),
+                ])
+
+        result = evaluate_decision_period(
+            forecasts,
+            actuals,
+            decision_from=date(2026, 1, 1),
+            decision_to=date(2026, 1, 3),
+            cutoff_time_utc=time(7, 30),
+        )
+
+        self.assertEqual(result["decision_days"], 2)
+        self.assertEqual(result["delivery_from"], "2026-01-02")
+        self.assertEqual(result["delivery_to_exclusive"], "2026-01-04")
+        self.assertEqual(result["metrics"]["expected_intervals"], 48)
+        self.assertEqual(result["metrics"]["matched_intervals"], 48)
+        self.assertEqual(result["metrics"]["mae_mw"], 10)
+        self.assertEqual(result["metrics"]["bias_mw"], 10)
+        self.assertEqual(result["daily"][0]["cutoff"], "2026-01-01T07:30:00Z")
+        self.assertEqual(result["daily"][1]["cutoff"], "2026-01-02T07:30:00Z")
 
 
 if __name__ == "__main__":

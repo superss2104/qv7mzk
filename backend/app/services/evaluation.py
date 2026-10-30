@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from math import sqrt
 from typing import Iterable, Mapping
 
@@ -150,3 +150,83 @@ def evaluate(
         bias_mw=bias,
     )
     return EvaluationResult(metrics, interval_rows)
+
+
+def evaluate_decision_period(
+    forecasts: Iterable[ForecastPoint | Mapping[str, object]],
+    actuals: Iterable[Mapping[str, object]],
+    *,
+    decision_from: date,
+    decision_to: date,
+    cutoff_time_utc: time,
+) -> dict[str, object]:
+    """Aggregate day-ahead metrics over a half-open range of decision dates.
+
+    Each decision date uses one fixed UTC cutoff for all 24 delivery hours on
+    the following date. The end date is exclusive.
+    """
+    if decision_to <= decision_from:
+        raise ValueError("decision_to must be later than decision_from")
+    if cutoff_time_utc.tzinfo is not None:
+        raise ValueError("cutoff_time_utc must be a UTC wall-clock time without a timezone")
+
+    forecast_rows = list(forecasts)
+    actual_rows = list(actuals)
+    daily: list[dict[str, object]] = []
+    errors: list[float] = []
+    expected = forecast_count = actual_count = matched_count = 0
+    decision_days = (decision_to - decision_from).days
+
+    for offset in range(decision_days):
+        decision_date = decision_from + timedelta(days=offset)
+        delivery_date = decision_date + timedelta(days=1)
+        cutoff = datetime.combine(decision_date, cutoff_time_utc, tzinfo=UTC)
+        delivery_start = datetime.combine(delivery_date, time.min, tzinfo=UTC)
+        delivery_end = delivery_start + timedelta(days=1)
+        result = evaluate(
+            forecast_rows,
+            actual_rows,
+            delivery_from=delivery_start,
+            delivery_to=delivery_end,
+            mode="fixed_cutoff",
+            cutoff=cutoff,
+        )
+        metrics = result.metrics
+        expected += metrics.expected_intervals
+        forecast_count += metrics.forecast_available
+        actual_count += metrics.actual_available
+        matched_count += metrics.matched_intervals
+        errors.extend(
+            float(row["error_mw"])
+            for row in result.intervals
+            if row["error_mw"] is not None
+        )
+        daily.append({
+            "decision_date": decision_date.isoformat(),
+            "delivery_date": delivery_date.isoformat(),
+            "cutoff": _iso(cutoff),
+            "metrics": asdict(metrics),
+        })
+
+    period_metrics = EvaluationMetrics(
+        expected_intervals=expected,
+        forecast_available=forecast_count,
+        actual_available=actual_count,
+        matched_intervals=matched_count,
+        forecast_coverage=forecast_count / expected,
+        actual_coverage=actual_count / expected,
+        matched_coverage=matched_count / expected,
+        mae_mw=sum(abs(error) for error in errors) / matched_count if matched_count else None,
+        rmse_mw=sqrt(sum(error * error for error in errors) / matched_count) if matched_count else None,
+        bias_mw=sum(errors) / matched_count if matched_count else None,
+    )
+    return {
+        "decision_from": decision_from.isoformat(),
+        "decision_to_exclusive": decision_to.isoformat(),
+        "decision_days": decision_days,
+        "delivery_from": (decision_from + timedelta(days=1)).isoformat(),
+        "delivery_to_exclusive": (decision_to + timedelta(days=1)).isoformat(),
+        "cutoff_time_utc": cutoff_time_utc.strftime("%H:%M"),
+        "metrics": asdict(period_metrics),
+        "daily": daily,
+    }

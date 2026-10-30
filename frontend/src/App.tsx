@@ -9,20 +9,31 @@ type Interval = {
   error_mw: number | null;
 };
 
+type Metrics = {
+  expected_intervals: number;
+  forecast_available: number;
+  actual_available: number;
+  matched_intervals: number;
+  forecast_coverage: number;
+  actual_coverage: number;
+  matched_coverage: number;
+  mae_mw: number | null;
+  rmse_mw: number | null;
+  bias_mw: number | null;
+};
+
 type Evaluation = {
-  metrics: {
-    expected_intervals: number;
-    forecast_available: number;
-    actual_available: number;
-    matched_intervals: number;
-    forecast_coverage: number;
-    actual_coverage: number;
-    matched_coverage: number;
-    mae_mw: number | null;
-    rmse_mw: number | null;
-    bias_mw: number | null;
-  };
+  metrics: Metrics;
   intervals: Interval[];
+};
+
+type PeriodEvaluation = {
+  decision_days: number;
+  delivery_from: string;
+  delivery_to_exclusive: string;
+  cutoff_time_utc: string;
+  metrics: Metrics;
+  daily: Array<{ decision_date: string; delivery_date: string; cutoff: string; metrics: Metrics }>;
 };
 
 type Metadata = {
@@ -132,9 +143,12 @@ function App() {
   const [cutoff, setCutoff] = useState(defaultCutoff);
   const [horizon, setHorizon] = useState("24");
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
+  const [periodEvaluation, setPeriodEvaluation] = useState<PeriodEvaluation | null>(null);
   const [metadata, setMetadata] = useState<Metadata | null>(null);
   const [busy, setBusy] = useState(true);
+  const [periodBusy, setPeriodBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [periodError, setPeriodError] = useState<string | null>(null);
 
   const query = useMemo(() => {
     const params = new URLSearchParams({
@@ -146,6 +160,8 @@ function App() {
     else params.set("horizon_hours", horizon);
     return params.toString();
   }, [deliveryDate, mode, cutoff, horizon]);
+
+  const periodQuery = useMemo(() => new URLSearchParams({ cutoff_time_utc: cutoff }).toString(), [cutoff]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -172,6 +188,24 @@ function App() {
       .finally(() => setBusy(false));
     return () => controller.abort();
   }, [query]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setPeriodBusy(true);
+    setPeriodError(null);
+    fetch(`/api/january-evaluation?${periodQuery}`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Could not load the January decision-period summary");
+        return response.json() as Promise<PeriodEvaluation>;
+      })
+      .then(setPeriodEvaluation)
+      .catch((reason: unknown) => {
+        if (reason instanceof DOMException && reason.name === "AbortError") return;
+        setPeriodError(reason instanceof Error ? reason.message : "Could not load the January summary.");
+      })
+      .finally(() => setPeriodBusy(false));
+    return () => controller.abort();
+  }, [periodQuery]);
 
   const metrics = evaluation?.metrics;
   const label = mode === "fixed_cutoff" ? `${previousDate(deliveryDate)} · ${cutoff} UTC cutoff` : `${horizon}h lead time`;
@@ -212,7 +246,7 @@ function App() {
           <section className="control-panel" aria-label="Evaluation controls">
             <div className="control-title"><span className="control-icon">⚙</span><div><strong>Evaluation setup</strong><small>Choose the delivery date and information available to the buyer.</small></div></div>
             <div className="control-fields">
-              <label className="field"><span>Delivery date</span><input type="date" value={deliveryDate} onChange={(event) => setDeliveryDate(event.target.value)} min="2026-01-01" max="2026-02-02" /></label>
+              <label className="field"><span>Delivery date</span><input type="date" value={deliveryDate} onChange={(event) => setDeliveryDate(event.target.value)} min="2026-01-02" max="2026-02-01" /></label>
               <label className="field"><span>Selection rule</span><select value={mode} onChange={(event) => setMode(event.target.value as Mode)}><option value="fixed_cutoff">Fixed decision cutoff</option><option value="fixed_horizon">Fixed lead time</option></select></label>
               {mode === "fixed_cutoff" ? (
                 <label className="field"><span>Decision cutoff <em>UTC · previous day</em></span><input type="time" value={cutoff} onChange={(event) => setCutoff(event.target.value)} /></label>
@@ -224,6 +258,21 @@ function App() {
           </section>
 
           {error && <div className="error-banner" role="alert"><strong>Couldn’t load this evaluation.</strong> {error} <span>Check that the API is running on port 8000.</span></div>}
+
+          <section className="panel period-panel" aria-label="January day-ahead summary">
+            <div className="panel-header">
+              <div><h3>January day-ahead summary</h3><p>31 decision dates · delivery dates Jan 2–Feb 1 · previous-day cutoff at {periodEvaluation?.cutoff_time_utc ?? cutoff} UTC</p></div>
+              <span className="period-chip">FULL PERIOD</span>
+            </div>
+            <div className="period-stats">
+              <div><span>Mean absolute error</span><strong>{periodBusy ? "—" : formatNumber(periodEvaluation?.metrics.mae_mw ?? null)} <small>MW</small></strong></div>
+              <div><span>Root mean square error</span><strong>{periodBusy ? "—" : formatNumber(periodEvaluation?.metrics.rmse_mw ?? null)} <small>MW</small></strong></div>
+              <div><span>Mean signed error</span><strong>{periodBusy || periodEvaluation?.metrics.bias_mw == null ? "—" : `${periodEvaluation.metrics.bias_mw >= 0 ? "+" : "−"}${formatNumber(Math.abs(periodEvaluation.metrics.bias_mw))}`} <small>MW</small></strong></div>
+              <div><span>Matched coverage</span><strong>{periodBusy || !periodEvaluation ? "—" : `${formatNumber(periodEvaluation.metrics.matched_coverage * 100, 1)}%`} <small>{periodBusy || !periodEvaluation ? "of hours" : `${periodEvaluation.metrics.matched_intervals}/${periodEvaluation.metrics.expected_intervals} hours`}</small></strong></div>
+            </div>
+            <div className="period-note">Overall scores use matched hours across all January decision dates. Select a delivery date below to inspect its 24 hourly intervals.</div>
+            {periodError && <div className="period-note" role="alert">{periodError}</div>}
+          </section>
 
           <div className="section-heading">
             <div><div className="section-kicker">DAY VIEW <span>·</span> {deliveryDate}</div><h2>Forecast performance</h2></div>
@@ -273,7 +322,7 @@ function App() {
                 <div><span>Matched intervals</span><strong>{metrics?.matched_intervals ?? 0} / {metrics?.expected_intervals ?? 24}</strong></div>
                 <div><span>Delivery date</span><strong>{deliveryDate}</strong></div>
               </div>
-              <div className="exposure-note"><span className="exposure-icon">↗</span><p><strong>Error direction matters.</strong> The cost of over- or underforecasting depends on imbalance prices and the buyer’s position.</p></div>
+              <div className="exposure-note"><span className="exposure-icon">↗</span><p><strong>Procurement implication.</strong> More forecast wind means less power to buy against expected demand. Positive error means wind was overforecast, which may leave a buyer short if they relied on that forecast. Negative error may leave excess purchases. Actual needs also depend on demand and the buyer’s position.</p></div>
             </aside>
           </div>
 

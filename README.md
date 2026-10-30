@@ -4,7 +4,7 @@ A small decision-support dashboard for comparing Elexon wind-generation forecast
 
 ## Current status
 
-The repository contains a normalized January 2026 publication-window snapshot and a working local dashboard/API. The default page shows a **single-day diagnostic for Jan 15, 2026 using a Jan 14, 2026 07:30 UTC decision cutoff**. The brief does not specify a cutoff time; 07:30 UTC is the configurable default assumption. This is a representative sample, not a January-wide backtest. No procurement cost or savings are estimated because demand, procurement positions, and imbalance prices are not included.
+The repository contains a normalized January 2026 publication-window snapshot and a working local dashboard/API. It summarizes **Jan 1–31 decision dates** at the configurable 07:30 UTC previous-day cutoff, covering delivery dates Jan 2–Feb 1, and opens with a **Jan 15, 2026 daily diagnostic**. The brief does not specify a cutoff time; 07:30 UTC is the documented default assumption. No procurement cost or savings are estimated because demand, procurement positions, and imbalance prices are not included.
 
 ## Project structure
 
@@ -76,15 +76,16 @@ Choose a different half-open publication window with `--start-date`, `--end-date
 
 - `GET /api/health` — loaded snapshot status and row counts.
 - `GET /api/metadata` — retrieval window, coverage, counts, and checksums.
+- `GET /api/january-evaluation` — aggregated metrics and daily results for January decision dates; accepts `cutoff_time_utc` (default `07:30`).
 - `GET /api/evaluation` — selected forecast series, actual series, errors, and summary metrics.
 
-The default evaluation route is the Jan 15 diagnostic at a 07:30 UTC cutoff on the previous day. Custom requests can set `delivery_from`, `delivery_to`, and either `mode=fixed_cutoff&cutoff=<UTC timestamp>` or `mode=fixed_horizon&horizon_hours=24`.
+The default daily evaluation is for Jan 15 delivery at a 07:30 UTC cutoff on Jan 14. The January summary applies one shared cutoff to all 24 delivery hours for each decision day from Jan 1 through Jan 31; deliveries run Jan 2 through Feb 1. Custom daily requests can set `delivery_from`, `delivery_to`, and either `mode=fixed_cutoff&cutoff=<UTC timestamp>` or `mode=fixed_horizon&horizon_hours=24`.
 
 ## Method and limitations
 
 - A forecast is eligible only when `publish_time <= cutoff`; a later publication cannot alter a decision-time result.
 - WINDFOR forecast deliveries are hourly while FUELHH actuals are half-hourly. The current comparison uses the arithmetic mean of the two expected half-hour actuals for each complete UTC hour. Incomplete actual hours remain missing; they are not filled with zero.
-- The default view contains 24 matched hourly intervals from one day. It is not a full January decision-date backtest.
+- The January summary covers 31 decision days and up to 744 hourly intervals; the selected-day view shows that date's 24 hourly rows.
 - Positive signed error (`forecast - actual`) is overforecasting; negative signed error is underforecasting. Which direction costs more depends on market prices and the buyer's position.
 - Dashboard timestamps are shown in `Europe/London`; timestamps in the saved data are UTC.
 - The snapshot covers Jan 2026 publication vintages, with delivery starts from Dec 31 through Feb 2. The exact retrieval timestamp and checksums are in `data/metadata.json`.
@@ -95,7 +96,7 @@ The default evaluation route is the Jan 15 diagnostic at a 07:30 UTC cutoff on t
 python -m unittest discover -s tests -v
 ```
 
-The suite covers query-row normalization, duplicate handling, publication-time eligibility, fixed-horizon selection, missing coverage, metric calculations, and a manually checked Elexon data example.
+The suite covers query-row normalization, duplicate handling, publication-time eligibility, fixed-horizon selection, missing coverage, daily and decision-period metric calculations, and a manually checked Elexon data example.
 
 ## Deployment
 
