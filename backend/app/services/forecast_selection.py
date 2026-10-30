@@ -74,6 +74,9 @@ def select_forecast(
     else:
         raise ValueError(f"Unsupported selection mode: {mode}")
 
+    if effective_cutoff > delivery:
+        raise ValueError("cutoff cannot be later than delivery start")
+
     unique: dict[tuple[datetime, datetime], ForecastPoint] = {}
     for value in rows:
         point = value if isinstance(value, ForecastPoint) else ForecastPoint.from_row(value)

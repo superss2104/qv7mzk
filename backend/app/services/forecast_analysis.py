@@ -54,7 +54,6 @@ def analyze_forecast_window(
     mode: SelectionMode,
     cutoff: datetime | None = None,
     horizon: timedelta | None = None,
-    decision_cutoff_time_utc: time = time(7, 30),
 ) -> dict[str, object]:
     """Build lead-time, revision, and January error-distribution analyses.
 
@@ -88,23 +87,42 @@ def analyze_forecast_window(
         grouped[point.delivery_start].append(point)
     actual_by_hour = hourly_actual_means(actuals)
 
-    buckets: list[dict[str, object]] = []
-    for lower, upper, label in LEAD_BUCKETS:
-        errors: list[float] = []
-        for delivery, points in grouped.items():
-            if not start <= delivery < end:
+    bucket_errors: list[list[float]] = [[] for _ in LEAD_BUCKETS]
+    candidate_forecasts = 0
+    excluded_incomplete_actual_count = 0
+    excluded_post_delivery_count = 0
+    observation_count = 0
+    for delivery, points in grouped.items():
+        if not start <= delivery < end:
+            continue
+        candidate_forecasts += len(points)
+        actual = actual_by_hour.get(delivery)
+        if actual is None:
+            excluded_incomplete_actual_count += len(points)
+            continue
+        for point in points:
+            if point.published_at > delivery:
+                excluded_post_delivery_count += 1
                 continue
-            actual = actual_by_hour.get(delivery)
-            if actual is None:
-                continue
-            for point in points:
-                if point.published_at > delivery:
-                    continue
-                lead = (delivery - point.published_at).total_seconds() / 3600
+            observation_count += 1
+            lead = (delivery - point.published_at).total_seconds() / 3600
+            for index, (lower, upper, _label) in enumerate(LEAD_BUCKETS):
                 if lower <= lead < upper:
-                    errors.append(point.generation_mw - actual)
-        if errors:
-            buckets.append({"label": label, "lower_hours": lower, "upper_hours": upper if upper != float("inf") else None, **_metrics(errors)})
+                    bucket_errors[index].append(point.generation_mw - actual)
+                    break
+
+    buckets = [
+        {
+            "label": label,
+            "lower_hours": lower,
+            "upper_hours": upper if upper != float("inf") else None,
+            **_metrics(errors),
+        }
+        for (lower, upper, label), errors in zip(LEAD_BUCKETS, bucket_errors)
+        if errors
+    ]
+    bucketed_observations = sum(len(errors) for errors in bucket_errors)
+    unbucketed_observations = observation_count - bucketed_observations
 
     revision_errors: list[tuple[datetime, float, float, ForecastPoint, ForecastPoint, float]] = []
     for delivery in (start + timedelta(hours=offset) for offset in range(int((end - start).total_seconds() // 3600))):
@@ -162,11 +180,11 @@ def analyze_forecast_window(
             raise ValueError("fixed_cutoff analysis requires a timezone-aware cutoff")
         cutoff_clock = cutoff.astimezone(UTC).timetz().replace(tzinfo=None)
     else:
-        cutoff_clock = decision_cutoff_time_utc
+        cutoff_clock = None
     for day in range(1, 32):
         decision_date = date(2026, 1, day)
         delivery_date = decision_date + timedelta(days=1)
-        daily_cutoff = datetime.combine(decision_date, cutoff_clock, tzinfo=UTC)
+        daily_cutoff = datetime.combine(decision_date, cutoff_clock, tzinfo=UTC) if cutoff_clock is not None else None
         for hour in range(24):
             delivery = datetime.combine(delivery_date, time.min, tzinfo=UTC) + timedelta(hours=hour)
             actual = actual_by_hour.get(delivery)
@@ -211,13 +229,21 @@ def analyze_forecast_window(
     decision_metrics = _metrics(decision_errors)
     later_metrics = _metrics(revised_errors)
     return {
-        "lead_time": {"buckets": buckets, "observation_count": sum(bucket["sample_count"] for bucket in buckets)},
+        "lead_time": {
+            "buckets": buckets,
+            "candidate_forecasts": candidate_forecasts,
+            "observation_count": observation_count,
+            "bucketed_observations": bucketed_observations,
+            "unbucketed_observations": unbucketed_observations,
+            "excluded_post_delivery_count": excluded_post_delivery_count,
+            "excluded_incomplete_actual_count": excluded_incomplete_actual_count,
+        },
         "revision": {
             "decision_time": decision_metrics,
             "later_vintage": later_metrics,
             "mae_improvement_mw": (decision_metrics["mae_mw"] - later_metrics["mae_mw"]) if n_decision and n_later else None,
             "rmse_improvement_mw": (decision_metrics["rmse_mw"] - later_metrics["rmse_mw"]) if n_decision and n_later else None,
-            "matched_intervals": min(n_decision, n_later),
+            "matched_intervals": len(revision_rows),
             "intervals": revision_rows,
         },
         "error_distribution": {
@@ -226,7 +252,7 @@ def analyze_forecast_window(
             "minimum_sample_count": MIN_QUANTILE_SAMPLE,
             "observation_window": "January 1–31, 2026 decision dates",
             "selection_rule": mode,
-            "cutoff_time_utc": cutoff_clock.strftime("%H:%M"),
+            "cutoff_time_utc": cutoff_clock.strftime("%H:%M") if cutoff_clock is not None else None,
             "bands": bands,
         },
     }

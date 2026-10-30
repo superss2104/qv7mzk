@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from backend.app.services.forecast_analysis import analyze_forecast_window
 
@@ -16,6 +16,35 @@ def actual(start, value):
 
 
 class ForecastAnalysisTests(unittest.TestCase):
+    def test_lead_bucket_boundaries_are_lower_inclusive_and_upper_exclusive(self):
+        delivery_from = datetime(2026, 1, 15, tzinfo=UTC)
+        leads = (0, 1, 3, 6, 12, 24, 36, 48, 72)
+        forecasts = []
+        actuals = []
+        for offset, lead in enumerate(leads):
+            delivery = delivery_from + timedelta(hours=offset)
+            delivery_text = delivery.isoformat().replace("+00:00", "Z")
+            published_text = (delivery - timedelta(hours=lead)).isoformat().replace("+00:00", "Z")
+            forecasts.append(forecast(delivery_text, published_text, 1))
+            actuals.extend([
+                actual(delivery_text, 0),
+                actual((delivery + timedelta(minutes=30)).isoformat().replace("+00:00", "Z"), 0),
+            ])
+
+        result = analyze_forecast_window(
+            forecasts,
+            actuals,
+            delivery_from=delivery_from,
+            delivery_to=delivery_from + timedelta(hours=len(leads)),
+            mode="fixed_cutoff",
+            cutoff=delivery_from - timedelta(hours=1),
+        )
+        self.assertEqual([bucket["label"] for bucket in result["lead_time"]["buckets"]], [
+            "0–1 h", "1–3 h", "3–6 h", "6–12 h", "12–24 h", "24–36 h", "36–48 h", "48–72 h", "72+ h",
+        ])
+        self.assertTrue(all(bucket["sample_count"] == 1 for bucket in result["lead_time"]["buckets"]))
+        self.assertEqual(result["lead_time"]["observation_count"], len(leads))
+
     def test_lead_buckets_and_revision_use_only_eligible_same_interval_vintages(self):
         delivery = "2026-01-15T12:00:00Z"
         forecasts = [

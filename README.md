@@ -16,6 +16,8 @@ backend/app/services/evaluation.py     Daily and decision-period error metrics
 backend/app/services/forecast_analysis.py
                                         Lead-time, revision, and empirical error analysis
 frontend/src/App.tsx                   React overview and interval explorer
+frontend/src/dashboardState.ts         Shareable URL filter and interval state
+frontend/src/timeFormat.ts             Europe/London timestamp display
 scripts/ingest_data.py                 Reproducible Elexon data ingestion
 data/actuals.csv                       Normalized FUELHH actuals
 data/forecasts.csv                     Normalized WINDFOR vintage rows
@@ -80,7 +82,9 @@ Choose a different half-open publication window with `--start-date`, `--end-date
 - `GET /api/metadata` — retrieval window, coverage, counts, and checksums.
 - `GET /api/january-evaluation` — aggregated metrics and daily results for January decision dates; accepts `cutoff_time_utc` (default `07:30`).
 - `GET /api/evaluation` — selected forecast series, actual series, errors, and summary metrics.
-- `GET /api/forecast-analytics` — lead-time buckets, matched-interval revision comparison, and January empirical error quantiles for the selected evaluation rule.
+- `GET /api/forecast-analytics` — lead-time buckets with candidate/eligible/excluded reconciliation, matched-interval revision comparison, and January empirical error quantiles for the selected evaluation rule.
+
+The frontend caches API results with TanStack Query. Delivery date, selection mode, the active cutoff or horizon, and a selected interval are stored in URL query parameters, so refreshes and shared links restore the dashboard state.
 
 The default daily evaluation is for Jan 15 delivery at a 07:30 UTC cutoff on Jan 14. The January summary applies one shared cutoff to all 24 delivery hours for each decision day from Jan 1 through Jan 31; deliveries run Jan 2 through Feb 1. Custom daily requests can set `delivery_from`, `delivery_to`, and either `mode=fixed_cutoff&cutoff=<UTC timestamp>` or `mode=fixed_horizon&horizon_hours=24`.
 
@@ -93,18 +97,24 @@ The default daily evaluation is for Jan 15 delivery at a 07:30 UTC cutoff on Jan
 - Elexon wind outturn reflects operational-metered generation available to the system operator; embedded or unmetered wind may not be represented in the source total.
 - Positive signed error (`forecast - actual`) is overforecasting; negative signed error is underforecasting. Which direction costs more depends on market prices and the buyer's position.
 - Lead-time accuracy counts every matched forecast-vintage/delivery observation published no later than delivery; only non-empty buckets are returned.
-- Revision impact compares the selected decision-time forecast with the latest vintage published by delivery, using only intervals matched in both. It is retrospective and is not a financial-savings estimate.
+- Lead-time output reconciles candidate forecast rows into eligible observations, bucketed and unbucketed counts, post-delivery exclusions, and incomplete-actual exclusions. Each eligible vintage/delivery pair is counted separately; each forecast is assigned to one half-open lead-time bucket.
+- Revision impact compares the selected decision-time forecast with the latest vintage published by delivery, using the same actual observation for both forecasts. The interval rows include each forecast value, publication timestamp, lead, and signed error. It is retrospective and is not a financial-savings estimate.
 - P10/P50/P90 use linearly interpolated empirical quantiles of January decision-time errors. They are shown only with at least 30 matched observations and are not guaranteed prediction intervals.
 - Dashboard timestamps are shown in `Europe/London`; timestamps in the saved data are UTC.
+- The actual snapshot contains 1,632 half-hour records across settlement dates Dec 31, 2025–Feb 2, 2026 (48 records per date). The January summary uses only the 744 hourly deliveries from Jan 2 through Feb 1, corresponding to Jan 1–31 decision dates; surrounding settlement dates provide data-window boundaries and are not included in those monthly KPIs.
+- The collapsible **Methodology & Data Quality** section lists the Elexon sources, selection rules, window interpretation, alignment and missing-data rules, retrieval time, row counts, and snapshot checksums.
 - The snapshot covers Jan 2026 publication vintages, with delivery starts from Dec 31 through Feb 2. The exact retrieval timestamp and checksums are in `data/metadata.json`.
 
 ## Tests
 
 ```bash
 python -m unittest discover -s tests -v
+cd frontend
+npm test
+npm run build
 ```
 
-The suite covers query-row normalization, duplicate handling, publication-time eligibility, fixed-horizon selection, missing coverage, daily and decision-period metric calculations, and a manually checked Elexon data example.
+The Python suite covers query-row normalization, duplicate handling, publication-time eligibility, fixed-horizon selection, missing coverage, daily and decision-period metric calculations, and a manually checked Elexon data example. Snapshot-audit tests independently recalculate January metrics, revision comparisons, historical quantiles, lead-time accounting, and selection behavior for every delivery interval under fixed-cutoff and fixed-horizon rules. The frontend tests cover URL-state restoration, validation, and UTC-to-London winter/summer display conversion.
 
 ## Deployment
 

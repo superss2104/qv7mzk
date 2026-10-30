@@ -61,6 +61,10 @@ class ForecastSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must include a timezone"):
             select_forecast([], "2026-01-16T12:00:00", mode="fixed_cutoff", cutoff="2026-01-16T10:00:00Z")
 
+    def test_rejects_a_cutoff_after_delivery(self):
+        with self.assertRaisesRegex(ValueError, "cannot be later than delivery"):
+            select_forecast([point("2026-01-16T12:01:00Z")], DELIVERY, mode="fixed_cutoff", cutoff="2026-01-16T12:30:00Z")
+
 
 if __name__ == "__main__":
     unittest.main()

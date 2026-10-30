@@ -1,4 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { readDashboardState, writeDashboardState } from "./dashboardState";
+import { londonTime } from "./timeFormat";
+
+async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(url, { signal });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { detail?: string };
+    throw new Error(body.detail ?? `Request failed (${response.status})`);
+  }
+  return response.json() as Promise<T>;
+}
 
 type Interval = {
   delivery_start: string;
@@ -60,7 +72,15 @@ type RevisionRow = {
 };
 
 type ForecastAnalytics = {
-  lead_time: { buckets: LeadBucket[]; observation_count: number };
+  lead_time: {
+    buckets: LeadBucket[];
+    candidate_forecasts: number;
+    observation_count: number;
+    bucketed_observations: number;
+    unbucketed_observations: number;
+    excluded_post_delivery_count: number;
+    excluded_incomplete_actual_count: number;
+  };
   revision: {
     decision_time: { sample_count: number; mae_mw: number | null; rmse_mw: number | null; bias_mw: number | null };
     later_vintage: { sample_count: number; mae_mw: number | null; rmse_mw: number | null; bias_mw: number | null };
@@ -77,7 +97,7 @@ type ForecastAnalytics = {
     minimum_sample_count: number;
     observation_window: string;
     selection_rule: Mode;
-    cutoff_time_utc: string;
+    cutoff_time_utc: string | null;
     bands: Array<{ delivery_start: string; forecast_mw: number; p10_mw: number; p50_mw: number; p90_mw: number }>;
   };
 };
@@ -85,14 +105,18 @@ type ForecastAnalytics = {
 type Metadata = {
   retrieved_at?: string;
   interpretation?: string;
-  records?: { forecast_vintages?: number; forecasts_normalized?: number; actuals_normalized?: number };
-  coverage?: { forecast_publish_time_from?: string; forecast_publish_time_to?: string };
+  source?: string;
+  query?: Record<string, string>;
+  records?: { forecast_vintages?: number; forecasts_normalized?: number; actuals_normalized?: number; actuals_raw?: number; forecasts_raw?: number };
+  coverage?: {
+    forecast_publish_time_from?: string;
+    forecast_publish_time_to?: string;
+    actual_settlement_dates?: string[];
+  };
+  checksums_sha256?: Record<string, string>;
 };
 
 type Mode = "fixed_cutoff" | "fixed_horizon";
-
-const defaultDate = "2026-01-15";
-const defaultCutoff = "07:30";
 
 function nextDate(date: string) {
   const [year, month, day] = date.split("-").map(Number);
@@ -106,16 +130,6 @@ function previousDate(date: string) {
 
 function utcIso(date: string, time = "00:00") {
   return `${date}T${time}:00Z`;
-}
-
-function londonTime(value: string | null | undefined, options: Intl.DateTimeFormatOptions = {}) {
-  if (!value) return "—";
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Europe/London",
-    hour: "2-digit",
-    minute: "2-digit",
-    ...options,
-  }).format(new Date(value));
 }
 
 function formatNumber(value: number | null, digits = 0) {
@@ -264,20 +278,12 @@ function RevisionChart({ rows }: { rows: RevisionRow[] }) {
 }
 
 function App() {
-  const [deliveryDate, setDeliveryDate] = useState(defaultDate);
-  const [mode, setMode] = useState<Mode>("fixed_cutoff");
-  const [cutoff, setCutoff] = useState(defaultCutoff);
-  const [horizon, setHorizon] = useState("24");
-  const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
-  const [periodEvaluation, setPeriodEvaluation] = useState<PeriodEvaluation | null>(null);
-  const [analytics, setAnalytics] = useState<ForecastAnalytics | null>(null);
-  const [metadata, setMetadata] = useState<Metadata | null>(null);
-  const [busy, setBusy] = useState(true);
-  const [periodBusy, setPeriodBusy] = useState(true);
-  const [analyticsBusy, setAnalyticsBusy] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [periodError, setPeriodError] = useState<string | null>(null);
-  const [analyticsError, setAnalyticsError] = useState<string | null>(null);
+  const [initialState] = useState(() => readDashboardState(window.location.search));
+  const [deliveryDate, setDeliveryDate] = useState(initialState.deliveryDate);
+  const [mode, setMode] = useState<Mode>(initialState.mode);
+  const [cutoff, setCutoff] = useState(initialState.cutoff);
+  const [horizon, setHorizon] = useState(initialState.horizon);
+  const [selectedInterval, setSelectedInterval] = useState<string | null>(initialState.selectedInterval);
 
   const query = useMemo(() => {
     const params = new URLSearchParams({
@@ -291,72 +297,46 @@ function App() {
   }, [deliveryDate, mode, cutoff, horizon]);
 
   const periodQuery = useMemo(() => new URLSearchParams({ cutoff_time_utc: cutoff }).toString(), [cutoff]);
+  const evaluationQuery = useQuery({ queryKey: ["evaluation", query], queryFn: ({ signal }) => fetchJson<Evaluation>(`/api/evaluation?${query}`, signal) });
+  const metadataQuery = useQuery({ queryKey: ["metadata"], queryFn: ({ signal }) => fetchJson<Metadata>("/api/metadata", signal), staleTime: 300_000 });
+  const periodQueryResult = useQuery({ queryKey: ["january-evaluation", periodQuery], queryFn: ({ signal }) => fetchJson<PeriodEvaluation>(`/api/january-evaluation?${periodQuery}`, signal) });
+  const analyticsQuery = useQuery({ queryKey: ["forecast-analytics", query], queryFn: ({ signal }) => fetchJson<ForecastAnalytics>(`/api/forecast-analytics?${query}`, signal) });
+  const evaluation = evaluationQuery.data;
+  const periodEvaluation = periodQueryResult.data;
+  const analytics = analyticsQuery.data;
+  const metadata = metadataQuery.data;
+  const busy = evaluationQuery.isLoading;
+  const periodBusy = periodQueryResult.isLoading;
+  const analyticsBusy = analyticsQuery.isLoading;
+  const error = evaluationQuery.error instanceof Error ? evaluationQuery.error.message : null;
+  const periodError = periodQueryResult.error instanceof Error ? periodQueryResult.error.message : null;
+  const analyticsError = analyticsQuery.error instanceof Error ? analyticsQuery.error.message : null;
 
   useEffect(() => {
-    const controller = new AbortController();
-    setBusy(true);
-    setError(null);
-    Promise.all([
-      fetch(`/api/evaluation?${query}`, { signal: controller.signal }).then(async (response) => {
-        if (!response.ok) throw new Error((await response.json()).detail ?? "Evaluation request failed");
-        return response.json() as Promise<Evaluation>;
-      }),
-      fetch("/api/metadata", { signal: controller.signal }).then(async (response) => {
-        if (!response.ok) throw new Error("Could not load snapshot metadata");
-        return response.json() as Promise<Metadata>;
-      }),
-    ])
-      .then(([nextEvaluation, nextMetadata]) => {
-        setEvaluation(nextEvaluation);
-        setMetadata(nextMetadata);
-      })
-      .catch((reason: unknown) => {
-        if (reason instanceof DOMException && reason.name === "AbortError") return;
-        setError(reason instanceof Error ? reason.message : "Could not load the evaluation.");
-      })
-      .finally(() => setBusy(false));
-    return () => controller.abort();
-  }, [query]);
+    const state = { deliveryDate, mode, cutoff, horizon, selectedInterval };
+    const search = writeDashboardState(state, window.location.search);
+    const nextUrl = `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`;
+    window.history.replaceState(null, "", nextUrl);
+  }, [deliveryDate, mode, cutoff, horizon, selectedInterval]);
 
   useEffect(() => {
-    const controller = new AbortController();
-    setPeriodBusy(true);
-    setPeriodError(null);
-    fetch(`/api/january-evaluation?${periodQuery}`, { signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Could not load the January decision-period summary");
-        return response.json() as Promise<PeriodEvaluation>;
-      })
-      .then(setPeriodEvaluation)
-      .catch((reason: unknown) => {
-        if (reason instanceof DOMException && reason.name === "AbortError") return;
-        setPeriodError(reason instanceof Error ? reason.message : "Could not load the January summary.");
-      })
-      .finally(() => setPeriodBusy(false));
-    return () => controller.abort();
-  }, [periodQuery]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setAnalyticsBusy(true);
-    setAnalyticsError(null);
-    fetch(`/api/forecast-analytics?${query}`, { signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Could not load forecast analytics");
-        return response.json() as Promise<ForecastAnalytics>;
-      })
-      .then(setAnalytics)
-      .catch((reason: unknown) => {
-        if (reason instanceof DOMException && reason.name === "AbortError") return;
-        setAnalyticsError(reason instanceof Error ? reason.message : "Could not load forecast analytics.");
-      })
-      .finally(() => setAnalyticsBusy(false));
-    return () => controller.abort();
-  }, [query]);
+    const restore = () => {
+      const state = readDashboardState(window.location.search);
+      setDeliveryDate(state.deliveryDate);
+      setMode(state.mode);
+      setCutoff(state.cutoff);
+      setHorizon(state.horizon);
+      setSelectedInterval(state.selectedInterval);
+    };
+    window.addEventListener("popstate", restore);
+    return () => window.removeEventListener("popstate", restore);
+  }, []);
 
   const metrics = evaluation?.metrics;
   const label = mode === "fixed_cutoff" ? `${previousDate(deliveryDate)} · ${cutoff} UTC cutoff` : `${horizon}h lead time`;
-  const biasPositive = (metrics?.bias_mw ?? 0) >= 0;
+  const bias = metrics?.bias_mw;
+  const biasPositive = (bias ?? 0) > 0;
+  const biasNegative = (bias ?? 0) < 0;
 
   return (
     <div className="app-shell">
@@ -393,7 +373,7 @@ function App() {
           <section className="control-panel" aria-label="Evaluation controls">
             <div className="control-title"><span className="control-icon">⚙</span><div><strong>Evaluation setup</strong><small>Choose the delivery date and information available to the buyer.</small></div></div>
             <div className="control-fields">
-              <label className="field"><span>Delivery date</span><input type="date" value={deliveryDate} onChange={(event) => setDeliveryDate(event.target.value)} min="2026-01-02" max="2026-02-01" /></label>
+              <label className="field"><span>Delivery date</span><input type="date" value={deliveryDate} onChange={(event) => { setDeliveryDate(event.target.value); setSelectedInterval(null); }} min="2026-01-02" max="2026-02-01" /></label>
               <label className="field"><span>Selection rule</span><select value={mode} onChange={(event) => setMode(event.target.value as Mode)}><option value="fixed_cutoff">Fixed decision cutoff</option><option value="fixed_horizon">Fixed lead time</option></select></label>
               {mode === "fixed_cutoff" ? (
                 <label className="field"><span>Decision cutoff <em>UTC · previous day</em></span><input type="time" value={cutoff} onChange={(event) => setCutoff(event.target.value)} /></label>
@@ -445,13 +425,17 @@ function App() {
             <article className="metric-card">
               <div className="metric-top"><span>Mean signed error</span><span className="metric-glyph">±</span></div>
               <div className={`metric-value ${biasPositive ? "positive" : "negative"}`}>{busy ? "—" : `${biasPositive ? "+" : "−"}${formatNumber(Math.abs(metrics?.bias_mw ?? 0))}`} <small>MW</small></div>
-              <div className="metric-note">{biasPositive ? "Positive means overforecasting" : "Negative means underforecasting"}</div>
+              <div className="metric-note">
+                {busy ? "Calculating signed error…" : biasPositive ? "Systematic wind overforecasting — potential shortfall exposure." : biasNegative ? "Systematic wind underforecasting — potential surplus exposure." : "No average signed bias in the matched hours."}
+                <span> Financial effects also depend on demand, procurement positions, and imbalance prices.</span>
+              </div>
               <div className={`metric-accent ${biasPositive ? "accent-amber" : "accent-rose"}`} />
             </article>
             <article className="metric-card">
               <div className="metric-top"><span>Matched coverage</span><span className="metric-glyph">◉</span></div>
               <div className="metric-value">{busy ? "—" : `${formatNumber((metrics?.matched_coverage ?? 0) * 100)}%`} <small>of hours</small></div>
-              <div className="metric-note">Forecasts {metrics?.forecast_available ?? 0} · actuals {metrics?.actual_available ?? 0} · matched {metrics?.matched_intervals ?? 0} of {metrics?.expected_intervals ?? 24}</div>
+              <div className="metric-note">Expected {metrics?.expected_intervals ?? 24} · actuals {metrics?.actual_available ?? 0} · eligible forecasts {metrics?.forecast_available ?? 0} · matched {metrics?.matched_intervals ?? 0}</div>
+              <div className="coverage-caption">Coverage checks one selected forecast and actual per hour; it does not count every available vintage.</div>
               <div className="metric-accent accent-green" />
             </article>
           </section>
@@ -477,10 +461,10 @@ function App() {
           </div>
 
           <section className="panel interval-panel">
-            <div className="panel-header"><div><h3>Hourly interval detail</h3><p>Publication timestamp is retained for each selected forecast.</p></div><span className="table-count">{evaluation?.intervals.length ?? 0} INTERVALS</span></div>
+            <div className="panel-header"><div><h3>Hourly interval detail</h3><p>Select a row to save that delivery interval in the URL. Publication timestamps are retained.</p></div><span className="table-count">{evaluation?.intervals.length ?? 0} INTERVALS</span></div>
             <div className="table-scroll"><table><thead><tr><th>Delivery start <small>London</small></th><th>Forecast <small>MW</small></th><th>Published <small>London</small></th><th>Actual <small>MW</small></th><th>Error <small>MW</small></th></tr></thead>
               <tbody>{(evaluation?.intervals ?? []).map((row) => (
-                <tr key={row.delivery_start}>
+                <tr key={row.delivery_start} className={selectedInterval === row.delivery_start ? "selected-interval" : undefined} onClick={() => setSelectedInterval(selectedInterval === row.delivery_start ? null : row.delivery_start)} aria-selected={selectedInterval === row.delivery_start} tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedInterval(selectedInterval === row.delivery_start ? null : row.delivery_start); } }}>
                   <td className="time-cell">{londonTime(row.delivery_start)}</td>
                   <td>{formatNumber(row.forecast_mw)}</td>
                   <td>{row.publish_time ? <span className="published-cell"><i /> {londonTime(row.publish_time)}</span> : <span className="missing">No eligible vintage</span>}</td>
@@ -496,11 +480,12 @@ function App() {
             <div className="panel-header"><div><h3>Forecast Accuracy by Lead Time</h3><p>Selected delivery period · only forecast vintages published by delivery are scored</p></div><span className="table-count">{analytics?.lead_time.observation_count ?? 0} OBSERVATIONS</span></div>
             {analyticsError && <div className="analytics-message" role="alert">{analyticsError}</div>}
             {analyticsBusy ? <div className="chart-loading"><span className="spinner" /> Calculating lead-time accuracy…</div> : <LeadTimeChart buckets={analytics?.lead_time.buckets ?? []} />}
+            <div className="revision-method-note">Eligible observations: {analytics?.lead_time.observation_count ?? 0} · bucketed: {analytics?.lead_time.bucketed_observations ?? 0} · unbucketed: {analytics?.lead_time.unbucketed_observations ?? 0} · excluded after delivery: {analytics?.lead_time.excluded_post_delivery_count ?? 0} · excluded for incomplete actuals: {analytics?.lead_time.excluded_incomplete_actual_count ?? 0}. Each eligible vintage is counted separately for its delivery interval.</div>
           </section>
 
           <section className="panel analytics-panel" aria-label="Forecast revision impact">
             <div className="panel-header"><div><h3>Forecast Revision Impact</h3><p>Retrospective comparison on the same intervals; later vintages are published after the decision cutoff and by delivery.</p></div><span className="table-count">{analytics?.revision.matched_intervals ?? 0} MATCHED</span></div>
-            {analyticsBusy ? <div className="chart-loading"><span className="spinner" /> Comparing forecast vintages…</div> : analytics?.revision.matched_intervals ? <>
+            {analyticsBusy ? <div className="chart-loading"><span className="spinner" /> Comparing forecast vintages…</div> : analyticsError ? <div className="analytics-message" role="alert">{analyticsError}</div> : analytics?.revision.matched_intervals ? <>
               <div className="revision-kpis">
                 <article><span>MAE · decision vs later</span><strong>{formatNumber(analytics.revision.decision_time.mae_mw)} <i>→</i> {formatNumber(analytics.revision.later_vintage.mae_mw)} <small>MW</small></strong><div>Improvement: {formatNumber(analytics.revision.mae_improvement_mw, 1)} MW · positive means later was more accurate</div></article>
                 <article><span>RMSE · decision vs later</span><strong>{formatNumber(analytics.revision.decision_time.rmse_mw)} <i>→</i> {formatNumber(analytics.revision.later_vintage.rmse_mw)} <small>MW</small></strong><div>Improvement: {formatNumber(analytics.revision.rmse_improvement_mw, 1)} MW · positive means later was more accurate</div></article>
@@ -512,12 +497,13 @@ function App() {
                   <td className="time-cell">{londonTime(row.delivery_start)}</td><td>{formatNumber(row.actual_mw)}</td><td>{formatNumber(row.decision_forecast_mw)}</td><td>{londonTime(row.decision_publish_time)}</td><td>{formatNumber(row.decision_lead_hours, 1)} h</td><td>{formatNumber(row.decision_error_mw, 1)}</td><td>{formatNumber(row.later_forecast_mw)}</td><td>{londonTime(row.later_publish_time)}</td><td>{formatNumber(row.later_lead_hours, 1)} h</td><td>{formatNumber(row.later_error_mw, 1)}</td>
                 </tr>)}</tbody>
               </table></div>
+              <div className="revision-method-note">Scroll the table horizontally to inspect the later forecast, publication time, lead, and error columns.</div>
             </> : <div className="chart-empty">No intervals had both a decision-time forecast and a later pre-delivery vintage.</div>}
           </section>
 
           <section className="panel analytics-panel" aria-label="Historical forecast error distribution">
             <div className="panel-header"><div><h3>Historical Forecast Error Distribution</h3><p>{analytics?.error_distribution.observation_window ?? "January 2026 decision dates"} · {mode === "fixed_cutoff" ? "previous-day cutoff" : `${horizon}-hour lead-time rule`}</p></div><span className="table-count">n={analytics?.error_distribution.sample_count ?? 0}</span></div>
-            {analyticsBusy ? <div className="chart-loading"><span className="spinner" /> Calculating empirical error range…</div> : analytics && analytics.error_distribution.sample_count >= analytics.error_distribution.minimum_sample_count ? <>
+            {analyticsBusy ? <div className="chart-loading"><span className="spinner" /> Calculating empirical error range…</div> : analyticsError ? <div className="analytics-message" role="alert">{analyticsError}</div> : analytics && analytics.error_distribution.sample_count >= analytics.error_distribution.minimum_sample_count ? <>
               <div className="distribution-stats">
                 <article><span>P10 error</span><strong>{formatNumber(analytics.error_distribution.p10_mw, 1)} <small>MW</small></strong></article>
                 <article><span>P50 error</span><strong>{formatNumber(analytics.error_distribution.p50_mw, 1)} <small>MW</small></strong></article>
@@ -525,6 +511,20 @@ function App() {
               </div>
               <div className="revision-method-note">The shaded chart range adds these signed-error quantiles to the selected forecast. This is an empirical historical range, not a guaranteed prediction interval. Minimum sample required: {analytics.error_distribution.minimum_sample_count} matched observations.</div>
             </> : <div className="chart-empty">Quantiles are withheld: {analytics?.error_distribution.sample_count ?? 0} matched observations; at least {analytics?.error_distribution.minimum_sample_count ?? 30} are required.</div>}
+          </section>
+
+          <section className="panel methodology-panel" id="methodology">
+            <details>
+              <summary>Methodology &amp; Data Quality</summary>
+              <div className="methodology-content">
+                {metadataQuery.error instanceof Error && <div className="analytics-message" role="alert">Snapshot metadata could not be loaded: {metadataQuery.error.message}</div>}
+                <div><h4>Sources and snapshot</h4><p>Actual wind generation comes from Elexon <a href="https://bmrs.elexon.co.uk/api-documentation/endpoint/datasets/FUELHH/stream" target="_blank" rel="noreferrer">FUELHH</a> filtered to WIND; hourly forecast vintages come from <a href="https://bmrs.elexon.co.uk/api-documentation/endpoint/datasets/WINDFOR/stream" target="_blank" rel="noreferrer">WINDFOR</a>. {metadata?.interpretation ?? "January refers to publication and decision dates; delivery starts can extend into February."}</p><p>Retrieved {metadata?.retrieved_at ? new Date(metadata.retrieved_at).toLocaleString("en-GB", { timeZone: "Europe/London", dateStyle: "medium", timeStyle: "short" }) + " Europe/London" : "snapshot timestamp unavailable"} · {metadata?.records?.forecasts_normalized ?? "—"} forecast rows across {metadata?.records?.forecast_vintages ?? "—"} vintages · {metadata?.records?.actuals_normalized ?? "—"} actual rows.</p>{metadata?.coverage?.actual_settlement_dates?.length ? <p>Actual settlement-date coverage: {metadata.coverage.actual_settlement_dates[0]} through {metadata.coverage.actual_settlement_dates[metadata.coverage.actual_settlement_dates.length - 1]}. Adjacent boundary dates support January’s delivery window; the January day-ahead summary evaluates only its defined delivery dates.</p> : null}</div>
+                <div><h4>Selection and time handling</h4><p>All saved timestamps are UTC. The dashboard displays them in Europe/London. Fixed cutoff selects the latest publication at or before the configured previous-day UTC cutoff. Fixed horizon selects the latest publication at or before delivery start minus the chosen horizon. Later publications never replace a historical decision forecast.</p></div>
+                <div><h4>Alignment and missing values</h4><p>Each hourly forecast is compared with the arithmetic mean of its two equal-duration half-hour FUELHH observations. Incomplete pairs remain missing and do not enter matched metrics. Missing forecasts and actuals are reported separately; no values are filled with zero.</p></div>
+                <div><h4>Metrics and hindsight comparison</h4><p>Error is forecast minus actual: positive is overforecasting and negative is underforecasting. Financial impact cannot be inferred without demand, procurement positions, and imbalance prices. The revision comparison uses the same intervals and the latest forecast published after decision time but no later than delivery; it describes retrospective accuracy, not savings.</p></div>
+                <div><h4>Snapshot checksums</h4><ul>{Object.entries(metadata?.checksums_sha256 ?? {}).map(([file, checksum]) => <li key={file}><code>{file}</code> · <code>{checksum}</code></li>)}</ul></div>
+              </div>
+            </details>
           </section>
 
           <footer className="page-footer"><div><strong>Method note</strong> · {metadata?.interpretation ?? "Forecasts are selected by publication timestamp; no forecast published after the configured decision time is used."}</div><div>Snapshot retrieved {metadata?.retrieved_at ? new Date(metadata.retrieved_at).toLocaleString("en-GB", { timeZone: "Europe/London" }) : "—"}</div></footer>
